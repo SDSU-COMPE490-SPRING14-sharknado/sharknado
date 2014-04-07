@@ -1,11 +1,27 @@
 #include <Adafruit_GPS.h>
 #include "location.h"
 #include <string>
+#include <SabertoothSimplified.h>
+#include <LSM303.h>
+#include <Wire.h>
+#define HOME_CAL //calibrate the compass for home operation
+#include <PID_v1.h>
+
+
+
+LSM303 compass;
 
 #define MAX_SPEED 3
 #define SLOW_SPEED 1
 
+#define encoder0PinA  3
+#define encoder0PinB  4
+
 sharknado::Location loc;
+SabertoothSimplified ST;
+
+volatile long encoder0Pos=0;
+
 #define mySerial Serial1
 Adafruit_GPS GPS(&mySerial);
 struct latlng
@@ -30,18 +46,22 @@ float current_heading=0;
 int motor_turning_coeff=0; //current val of motor steering interface
 float current_gps_heading;
 float current_magnetometer_heading;
-int expected_heading;
+int expected_heading=0;
 
 //trusted speed -- function of encoders and GPS
-float current_speed=0;
-int motor_speed_coeff=0; //current val of motor speed interface
+double current_speed=0;
+double motor_speed_coeff=0; //current val of motor speed interface
 float current_gps_speed;
 float current_encoder_speed;
 //this is the speed we WANT to go
-int expected_speed=0;
+double expected_speed=0;
 
 
-
+//Define Variables we'll be connecting to
+double Setpoint, Input, Output;
+//Specify the links and initial tuning parameters
+PID heading_PID(&Input, &Output, &Setpoint, 2,5,1, DIRECT);
+PID speed_PID(&current_speed, &motor_speed_coeff, &expected_speed, 2,5,1, DIRECT);
 
 
 void setup() {
@@ -62,14 +82,39 @@ void setup() {
     delay(1000);
     // Ask for firmware version
     mySerial.println(PMTK_Q_RELEASE);
-    
-    
 
+  Serial.begin(9600);
 
-Serial.begin(9600);
+   pinMode(encoder0PinA, INPUT);
+  pinMode(encoder0PinB, INPUT);
+  attachInterrupt(encoder0PinA, doEncoder, RISING);  // encoDER ON PIN 2
+  
+   SabertoothTXPinSerial.begin(9600); // This is the baud rate you chose with the DIP switches.             
+  ST.drive(0); // The Sabertooth won't act on mixed mode until
+  ST.turn(0); 
+  
+  
+  //setup magnotometer
+  Wire.begin();
+  compass.init();
+  compass.enableDefault();
+  
+  #ifdef HOME_CAL
+    Serial.println("Calibrating compass for home mode");
+  compass.m_min = (LSM303::vector<int16_t>){-2102,  -1949,  +1831};
+  compass.m_max = (LSM303::vector<int16_t>){-324,   -433,  +2512};
+  #else
+    Serial.println("Calibrating compass for lab mode");
+    compass.m_min = (LSM303::vector<int16_t>){-1299, -1317, +1085};
+    compass.m_max = (LSM303::vector<int16_t>){+428, +353, +1341};
+  #endif
 
-
-
+  heading_PID.SetMode(AUTOMATIC);
+  heading_PID.SetOutputLimits(-127,127);
+  
+  speed_PID.SetMode(AUTOMATIC);
+  speed_PID.SetOutputLimits(0,127);
+  
 }
 
 uint32_t timer = millis(); //get timestamp
@@ -97,22 +142,29 @@ void loop() {
             
         }
         
+    //update current mag heading
+    compass.read();
+    current_heading=compass.heading();
+    float adj_heading=aconv(current_heading);
+    Input = adj_heading;
+    heading_PID.Compute();
+    motor_turning_coeff=Output;
+    
    //compute expected shark speed every cycle
    update_expected_speed();
-   control_speed();
-   control_heading();
    
    //now update motors based on new estimates:
-   //ST.drive(motor_speed_coeff)
-   //ST.turn(motor_turning_coeff)
+   ST.drive(motor_speed_coeff)
+   ST.turn(motor_turning_coeff)
    
-   Serial.print(current_latlng.lat, 9); Serial.print(", ");
-   Serial.print(current_latlng.lng, 9); Serial.print(", ");
-   Serial.print("distance: "); Serial.print(current_target_distance);Serial.print(", ");
-   Serial.print("initial heading: "); Serial.println(current_target_heading);
+   //Serial.print(current_latlng.lat, 9); Serial.print(", ");
+   //Serial.print(current_latlng.lng, 9); Serial.print(", ");
+   //Serial.print("distance: "); Serial.print(current_target_distance);Serial.print(", ");
+   //Serial.print("initial heading: "); Serial.println(current_target_heading);
    Serial.print("Expected Speed: "); Serial.print(expected_speed); Serial.print(", Actual Speed: "); Serial.println(current_speed);
    Serial.print("motor_speed_coeff: ");Serial.println(motor_speed_coeff);
-   Serial.print("motor_turning_coeff");Serial.println(motor_turning_coeff);
+   Serial.print("motor_turning_coeff: ");Serial.println(motor_turning_coeff);
+   Serial.print("current heading: ");Serial.println(current_heading);
     }//end timer
 }//end loop
 
@@ -133,24 +185,20 @@ void update_expected_speed()
   else if(current_target_distance <=0)   expected_speed=0; //stop, we passed beacon.
 }
 
-void control_speed()
+
+
+void doEncoder()
 {
-  int diff=current_speed-expected_speed;
-  
-  //increment/decrement motor speed by factor of 1 until speed stabalizes
-  (diff < 0) ? motor_speed_coeff++ : motor_speed_coeff-- ;
-  
-  Serial.print("Speed Adjustment: "); Serial.println(diff);
+  if (digitalRead(encoder0PinA) == digitalRead(encoder0PinB)) {
+    encoder0Pos++;
+  } else {
+    encoder0Pos--;
+  }
 }
 
 
-void control_heading()
+//this scales a 0-360 heading to -180-180 for the PID library input
+float aconv(float theta)
 {
-  //need to revisit this
-  //i forget the range of the turning interface
-  //for example of heading is on left I think I need to -- and on right I need to ++
-  //but the compass will only return pos 0-360 vals.
-  int diff=current_heading - expected_heading;
-  (diff < 0) ? motor_turning_coeff++ : motor_turning_coeff-- ;
-
+  return fmod((theta + 180.0f), 360.0f) - 180.0f;
 }
