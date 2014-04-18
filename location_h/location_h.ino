@@ -4,7 +4,7 @@
 #include <Sabertooth.h>
 #include <LSM303.h>
 #include <Wire.h>
-#define HOME_CAL //calibrate the compass for home operation
+#define LAB_CAL //calibrate the compass for home operation
 #include <PID_v1.h>
 
 
@@ -85,7 +85,7 @@ void setup() {
     // pinMode(encoder0PinA, INPUT);
     // pinMode(encoder0PinB, INPUT);
 	//encoder interrupts
-    attachInterrupt(encoder0PinA, doEncoder, RISING);  // encoDER ON PIN 2
+    //attachInterrupt(encoder0PinA, doEncoder, RISING);  // encoDER ON PIN 2
     //attachInterrupt(encoder1PinA, doEncoder1, RISING);
 	
 
@@ -97,7 +97,7 @@ void setup() {
 
     //setup magnotometer
 	//interrupts for magnetometer
-	attachInterrupt(22, handle_compass, RISING);
+	//attachInterrupt(22, handle_compass, RISING);
     Wire.begin();
     bool compass_status=compass.init();
     compass.enableDefault();
@@ -110,25 +110,23 @@ void setup() {
     //min: {  -617,  -1118,   +988}    max: { +1495,  +1025,  +1155} lab
     //min: {  -752,  -1401,  +2073}    max: { +1224,   +743,  +2942}
     //min: { -1970,  -2568,  +1301}    max: { +1620,   +912,  +1950} field
-    //{ -1563,  -1675,  +1059}    max: { +1797,  +1509,  +1723} outside parking
+    //min: { -1563,  -1675,  +1059}    max: { +1797,  +1509,  +1723} outside parking
     //min: { -1028,   -784,  +2487}    max: { +1121,  +1215,  +3276} home
+    //min: { -2024,  -1198,   +522}    max: {  +415,  +1047,  +1369} lab friday
+
     Serial.println("Calibrating compass for lab mode");
-    compass.m_min = (LSM303::vector<int16_t>) {
-        -1563,  -1675,  +1059
-    };
-    compass.m_max = (LSM303::vector<int16_t>) {
-        +1797,  +1509,  +1723
-    };
+    compass.m_min = (LSM303::vector<int16_t>) { -2024,  -1198,   +522} ;
+    compass.m_max = (LSM303::vector<int16_t>) {  +415,  +1047,  +1369};
 #endif
 
     heading_PID.SetMode(AUTOMATIC);
-    heading_PID.SetOutputLimits(-9,9);
+    heading_PID.SetOutputLimits(-3,3);
 
     speed_PID.SetMode(AUTOMATIC);
     speed_PID.SetOutputLimits(0,127);
 
     //HACK: hard code an initial drive power
-    ST.drive(25);
+    ST.drive(15);
 
 }
 
