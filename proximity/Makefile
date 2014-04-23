@@ -1,164 +1,277 @@
-#!/usr/bin/make
-# makefile for the arduino due.
+
 #
-# USAGE: put this file in the same dir as your .ino file is.
-# configure the PORT variable and ADIR at the top of the file
-# to match your local configuration.
-# Type make upload to compile and upload.
-# Type make monitor to watch the serial port with gnu screen.
+# Arduino-1.0 Makefile 
 #
-# TODO: split into user specific settings and the rest
+# written by olikraus@gmail.com
 #
-# LICENSE: GPLv2 or later (at your option)
+# Features:
+#   - boards.txt is used to derive parameters
+#   - All intermediate files are put into a separate directory (TMPDIRNAME)
+#   - Simple use: Copy Makefile into the same directory of the .pde file
 #
-# This file can be found at https://github.com/pauldreik/arduino-due-makefile
+# Limitations:
+#   - requires UNIX environment
+#   - TMPDIRNAME must be subdirectory of the current directory.
 #
-# By Paul Dreik 20130503 http://www.pauldreik.se/
+# Targets
+# 	all		build everything
+#	upload	build and upload to arduino
+#	clean	remove all temporary files (includes final hex file)
+#
+# History
+#	001	28 Apr 2010	first  release
+#	002  05 Oct 2010	added 'uno'
+#	003  06 Dec 2011    arduino 1.0 
+#	004  11 Feb 2012     u8glib   
+#	005	24 Feb 2013	arduino 1.5.2 Due
+#
+
+#=== user configuration ===
+# All ...PATH variables must have a '/' at the end
+
+# Board (and prozessor) information: see $(ARDUINO_PATH)hardware/arduino/boards.txt
+# Some examples:
+#	BOARD		DESCRIPTION
+#	arduino_due_x			Arduino Due
+BOARD:=arduino_due_x
 
 
-#user specific settings:
-#where to find the IDE
-ADIR:=/Applications/Arduino.app/Contents/Resources/Java/hardware
-#which serial port to use (add a file with SUBSYSTEMS=="usb", ATTRS{product}=="Arduino Due Prog. Port", ATTRS{idProduct}=="003d", ATTRS{idVendor}=="2341", SYMLINK+="arduino_due" in /etc/udev/rules.d/ to get this working)
-PORT:=/dev/arduino_due
-#if we want to verify the bossac upload, define this to -v
-VERIFY:=
+  
+U8G_PATH:=$(shell cd ../../.. && pwd)/csrc/
+U8G_CPP_PATH:=$(shell cd ../../.. && pwd)/cppsrc/
+U8G_FONT_PATH:=$(shell cd ../../.. && pwd)/sfntsrc/
 
 
-#then some general settings. They should not be necessary to modify.
-CXX:=$(ADIR)/tools/g++_arm_none_eabi/bin/arm-none-eabi-g++
-CC:=$(ADIR)/tools/g++_arm_none_eabi/bin/arm-none-eabi-gcc
-C:=$(CC)
-SAM:=arduino/sam/
-CMSIS:=arduino/sam/system/CMSIS/
-LIBSAM:=arduino/sam/system/libsam
-TMPDIR:=$(PWD)/build
-AR:=$(ADIR)/tools/g++_arm_none_eabi/bin/arm-none-eabi-ar 
+# The location where the avr tools (e.g. avr-gcc) are located. Requires a '/' at the end.
+# Can be empty if all tools are accessable through the search path
+AVR_TOOLS_PATH:=/Applications/Arduino.app/Contents/Resources/Java/hardware/tools/g++_arm_none_eabi/bin/
+
+# Install path of the arduino software. Requires a '/' at the end.
+ARDUINO_PATH:=/Applications/Arduino.app/Contents/Resources/Java/
+
+# Install path for bossac. Requires a '/' at the end. Can be empty if bossac is in the search path.
+BOSSAC_PATH:=$(ARDUINO_PATH)hardware/tools/
+
+# The unix device where we can reach the arduino board
+# Due: /dev/ttyACM0
+PORT:=/dev/ttyACM0
+
+# List of all libaries which should be included.
+EXTRA_DIRS=$(ARDUINO_PATH)libraries/LiquidCrystal/
+#EXTRA_DIRS+=$(ARDUINO_PATH)libraries/.../
+
+#=== fetch parameter from boards.txt processor parameter ===
+# the basic idea is to get most of the information from boards.txt
+
+SAM_DIR:=$(ARDUINO_PATH)hardware/arduino/sam/
+BOARDS_TXT:=$(SAM_DIR)boards.txt
+
+# get the MCU value from the $(BOARD).build.mcu variable. For the atmega328 board this is atmega328p
+MCU:=$(shell sed -n -e "s/$(BOARD).build.mcu=\(.*\)/\1/p" $(BOARDS_TXT))
+# get the F_CPU value from the $(BOARD).build.f_cpu variable. For the atmega328 board this is 16000000
+F_CPU:=$(shelled -n -e "s/$(BOARD).build.f_cpu=\(.*\)/\1/p" $(BOARDS_TXT))
+# get variant subfolder
+VARIANT:=$(shell sed -n -e "s/$(BOARD).build.variant=\(.*\)/\1/p" $(BOARDS_TXT))
+LDSCRIPT:=$(SAM_DIR)variants/$(VARIANT)/$(shell sed -n -e "s/$(BOARD).build.ldscript=\(.*\)/\1/p" $(BOARDS_TXT))
+SYSLIB:=$(SAM_DIR)variants/$(VARIANT)/$(shell sed -n -e "s/$(BOARD).build.variant_system_lib=\(.*\)/\1/p" $(BOARDS_TXT))
 
 
-#all these values are hard coded and should maybe be configured somehow else,
-#like olikraus does in his makefile.
-DEFINES:=-Dprintf=iprintf -DF_CPU=84000000L -DARDUINO=152 -D__SAM3X8E__ -DUSB_PID=0x003e -DUSB_VID=0x2341 -DUSBCON
+#=== identify user files ===
+PDESRC:=$(shell ls *.pde)
+TARGETNAME=$(basename $(PDESRC))
 
-INCLUDES:=-I$(ADIR)/$(LIBSAM) -I$(ADIR)/$(CMSIS)/CMSIS/Include/ -I$(ADIR)/$(CMSIS)/Device/ATMEL/ -I$(ADIR)/$(SAM)/cores/arduino -I$(ADIR)/$(SAM)/variants/arduino_due_x
+CDIRS:=$(EXTRA_DIRS) $(addsuffix utility/,$(EXTRA_DIRS))
+CDIRS:=*.c utility/*.c $(U8G_PATH)*.c $(U8G_FONT_PATH)*.c $(addsuffix *.c,$(CDIRS)) $(ARDUINO_PATH)hardware/arduino/sam/cores/arduino/*.c
+CSRC:=$(shell ls $(CDIRS) 2>/dev/null)
 
-#also include the current dir for convenience
-INCLUDES += -I.
+CCSRC:=$(shell ls *.cc 2>/dev/null)
 
-#compilation flags common to both c and c++
-COMMON_FLAGS:=-g -Os -w -ffunction-sections -fdata-sections -nostdlib --param max-inline-insns-single=500 -mcpu=cortex-m3  -mthumb
+CPPDIRS:=$(EXTRA_DIRS) $(addsuffix utility/,$(EXTRA_DIRS))
+CPPDIRS:=*.cpp utility/*.cpp $(addsuffix *.cpp,$(CPPDIRS)) $(U8G_CPP_PATH)/*.cpp $(ARDUINO_PATH)hardware/arduino/sam/cores/arduino/*.cpp $(ARDUINO_PATH)hardware/arduino/sam/variants/$(VARIANT)/*.cpp
+CPPSRC:=$(shell ls $(CPPDIRS) 2>/dev/null)
 
-CFLAGS:=$(COMMON_FLAGS)
-CXXFLAGS:=$(COMMON_FLAGS) -fno-rtti -fno-exceptions 
+#=== build internal variables ===
 
-#let the results be named after the project
-PROJNAME:=$(shell basename *.ino .ino)
+# the name of the subdirectory where everything is stored
+TMPDIRNAME:=temp
+TMPDIRPATH:=$(TMPDIRNAME)/
 
-#we will make a new mainfile from the ino file.
-NEWMAINFILE:=$(TMPDIR)/$(PROJNAME).ino.cpp
+AVRTOOLSPATH:=$(AVR_TOOLS_PATH)
 
-#our own sourcefiles is the (converted) ino file and any local cpp files
-MYSRCFILES:=$(NEWMAINFILE) $(shell ls *.cpp 2>/dev/null)
-MYOBJFILES:=$(addsuffix .o,$(addprefix $(TMPDIR)/,$(notdir $(MYSRCFILES))))
+OBJCOPY:=$(AVRTOOLSPATH)arm-none-eabi-objcopy
+OBJDUMP:=$(AVRTOOLSPATH)arm-none-eabi-objdump
+SIZE:=$(AVRTOOLSPATH)arm-none-eabi-size
 
-#These source files are the ones forming core.a
-CORESRCXX:=$(shell ls ${ADIR}/${SAM}/cores/arduino/*.cpp ${ADIR}/${SAM}/cores/arduino/USB/*.cpp  ${ADIR}/${SAM}/variants/arduino_due_x/variant.cpp)
-CORESRC:=$(shell ls ${ADIR}/${SAM}/cores/arduino/*.c)
+CPPSRC:=$(addprefix $(TMPDIRPATH),$(PDESRC:.pde=.cpp)) $(CPPSRC)
 
-#convert the core source files to object files. assume no clashes.
-COREOBJSXX:=$(addprefix $(TMPDIR)/core/,$(notdir $(CORESRCXX)) )
-COREOBJSXX:=$(addsuffix .o,$(COREOBJSXX))
-COREOBJS:=$(addprefix $(TMPDIR)/core/,$(notdir $(CORESRC)) )
-COREOBJS:=$(addsuffix .o,$(COREOBJS))
+COBJ:=$(CSRC:.c=.o)
+CCOBJ:=$(CCSRC:.cc=.o)
+CPPOBJ:=$(CPPSRC:.cpp=.o)
 
-default:
-	@echo default rule, does nothing. Try make compile or make upload.
+OBJFILES:=$(COBJ) $(CCOBJ) $(CPPOBJ)
+DIRS:= $(dir $(OBJFILES))
 
-#This rule is good to just make sure stuff compiles, without having to wait
-#for bossac.
-compile: $(TMPDIR)/$(PROJNAME).elf
-
-#This is a make rule template to create object files from the source files.
-# arg 1=src file
-# arg 2=object file
-# arg 3= XX if c++, empty if c
-define OBJ_template
-$(2): $(1)
-	$(C$(3)) -MD -c $(C$(3)FLAGS) $(DEFINES) $(INCLUDES) $(1) -o $(2)
-endef
-#now invoke the template both for c++ sources
-$(foreach src,$(CORESRCXX), $(eval $(call OBJ_template,$(src),$(addsuffix .o,$(addprefix $(TMPDIR)/core/,$(notdir $(src)))),XX) ) )
-#...and for c sources:
-$(foreach src,$(CORESRC), $(eval $(call OBJ_template,$(src),$(addsuffix .o,$(addprefix $(TMPDIR)/core/,$(notdir $(src)))),) ) )
-
-#and our own c++ sources
-$(foreach src,$(MYSRCFILES), $(eval $(call OBJ_template,$(src),$(addsuffix .o,$(addprefix $(TMPDIR)/,$(notdir $(src)))),XX) ) )
+DEPFILES:=$(OBJFILES:.o=.d)
+# assembler files from arm-none-eabi-gcc -S
+ASSFILES:=$(OBJFILES:.o=.s)
+# disassembled object files with arm-none-eabi-objdump -S
+DISFILES:=$(OBJFILES:.o=.dis)
 
 
+LIBNAME:=$(TMPDIRPATH)$(TARGETNAME).a
+ELFNAME:=$(TMPDIRPATH)$(TARGETNAME).elf
+HEXNAME:=$(TMPDIRPATH)$(TARGETNAME).hex
+
+# bossac --port=ttyACM0 -U false -e -w -v -b /tmp/build3125761901550223244.tmp/Blink.cpp.bin -R
+
+
+#BOSSAC_FLAGS = --port=$(PORT) -U false -e -w -v -b $(HEXNAME) -R
+# --port does not work
+BOSSAC_FLAGS = -U false -e -w -v -b $(HEXNAME) -R
+
+BOSSAC = $(BOSSAC_PATH)bossac
+
+#=== predefined variable override ===
+# use "make -p -f/dev/null" to see the default rules and definitions
+
+
+# Build C and C++ flags. Include path information must be placed here
+COMMON_FLAGS = -DF_CPU=$(F_CPU) -mcpu=$(MCU) $(DEFS) -DARDUINO=152
+COMMON_FLAGS += -D__SAM3X8E__ -mthumb -DUSB_PID=0x03e -DUSB_VID=0x2341
+#COMMON_FLAGS += -DUSBCON
+COMMON_FLAGS += -Os -w -ffunction-sections -fdata-sections -Wl,--gc-sections 
+#COMMON_FLAGS += -nostdlib 
+COMMON_FLAGS += --param max-inline-insns-single=500 -fno-rtti -fno-exceptions -Dprintf=iprintf 
+COMMON_FLAGS += -Wall -funsigned-char -funsigned-bitfields -fpack-struct -fshort-enums
+COMMON_FLAGS += -I. 
+COMMON_FLAGS += -I$(ARDUINO_PATH)hardware/arduino/sam/system/libsam
+COMMON_FLAGS += -I$(ARDUINO_PATH)hardware/arduino/sam/system/CMSIS/CMSIS/Include/
+COMMON_FLAGS += -I$(ARDUINO_PATH)hardware/arduino/sam/system/CMSIS/Device/ATMEL/
+COMMON_FLAGS += -I$(ARDUINO_PATH)hardware/arduino/sam/cores/arduino
+COMMON_FLAGS += -I$(ARDUINO_PATH)hardware/arduino/sam/variants/$(VARIANT)
+COMMON_FLAGS += -I. -I$(U8G_PATH) -I$(U8G_CPP_PATH)
+COMMON_FLAGS += $(addprefix -I,$(EXTRA_DIRS))
+#COMMON_FLAGS += 
+#COMMON_FLAGS += -Wl,--relax
+
+CFLAGS = $(COMMON_FLAGS) -std=gnu99 -Wstrict-prototypes  
+CXXFLAGS = $(COMMON_FLAGS) 
+
+SAMLDFLAGS =  -T $(LDSCRIPT) -Wl,--Map=output.map
+SAMLDFLAGS +=  -lm -lgcc -mthumb -Wl,--cref -Wl,--check-sections -Wl,--gc-sections -Wl,--entry=Reset_Handler -Wl,--unresolved-symbols=report-all 
+SAMLDFLAGS +=-Wl,--warn-common -Wl,--warn-section-align -Wl,--warn-unresolved-symbols 
+
+# Replace standard build tools by avr tools
+CC = $(AVRTOOLSPATH)arm-none-eabi-gcc
+CXX = $(AVRTOOLSPATH)arm-none-eabi-g++
+AR  = @$(AVRTOOLSPATH)arm-none-eabi-ar
+
+
+# "rm" must be able to delete a directory tree
+RM = rm -rf 
+
+#=== rules ===
+
+# add rules for the C/C++ files where the .o file is placed in the TMPDIRPATH
+# reuse existing variables as far as possible
+
+$(TMPDIRPATH)%.o: %.c
+	@echo compile $<
+	@$(COMPILE.c) $(OUTPUT_OPTION) $<
+
+$(TMPDIRPATH)%.o: %.cc
+	@echo compile $< 
+	@$(COMPILE.cc) $(OUTPUT_OPTION) $<
+
+$(TMPDIRPATH)%.o: %.cpp
+	@echo compile $<
+	@$(COMPILE.cpp) $(OUTPUT_OPTION) $<
+
+$(TMPDIRPATH)%.s: %.c
+	@$(COMPILE.c) $(OUTPUT_OPTION) -S $<
+
+$(TMPDIRPATH)%.s: %.cc
+	@$(COMPILE.cc) $(OUTPUT_OPTION) -S $<
+
+$(TMPDIRPATH)%.s: %.cpp
+	@$(COMPILE.cpp) $(OUTPUT_OPTION) -S $<
+
+$(TMPDIRPATH)%.dis: $(TMPDIRPATH)%.o
+	@$(OBJDUMP) -S $< > $@
+
+.SUFFIXES: .elf .hex .pde
+
+.elf.hex:
+	@$(OBJCOPY) -O binary $< $@
+	
+$(TMPDIRPATH)%.cpp: %.pde
+	@cat $(ARDUINO_PATH)hardware/arduino/sam/cores/arduino/main.cpp > $@
+	@cat $< >> $@
+	@echo >> $@
+	@echo 'extern "C" void __cxa_pure_virtual() { while (1); }' >> $@
+
+
+.PHONY: all
+all: tmpdir $(HEXNAME) assemblersource showsize
+	ls -al $(HEXNAME) $(ELFNAME)
+
+$(ELFNAME): $(LIBNAME)($(addprefix $(TMPDIRPATH),$(OBJFILES))) 
+	$(LINK.o) $(COMMON_FLAGS) $(SAMLDFLAGS) -Wl,--start-group $(LIBNAME) $(LOADLIBES) $(LDLIBS) $(SYSLIB) -Wl,--end-group -o $@
+
+$(LIBNAME)(): $(addprefix $(TMPDIRPATH),$(OBJFILES))
+
+#=== create temp directory ===
+# not really required, because it will be also created during the dependency handling
+.PHONY: tmpdir
+tmpdir:
+	@test -d $(TMPDIRPATH) || mkdir $(TMPDIRPATH)
+
+#=== create assembler files for each C/C++ file ===
+.PHONY: assemblersource
+assemblersource: $(addprefix $(TMPDIRPATH),$(ASSFILES)) $(addprefix $(TMPDIRPATH),$(DISFILES))
+
+
+#=== show the section sizes of the ELF file ===
+.PHONY: showsize
+showsize: $(ELFNAME)
+	$(SIZE) $<
+
+#=== clean up target ===
+# this is simple: the TMPDIRPATH is removed
+.PHONY: clean
 clean:
-	test ! -d $(TMPDIR) || rm -rf $(TMPDIR)
+	$(RM) $(TMPDIRPATH)
 
-.PHONY: upload default
-
-$(TMPDIR):
-	mkdir -p $(TMPDIR)
-
-$(TMPDIR)/core:
-	mkdir -p $(TMPDIR)/core
-
-#creates the cpp file from the .ino file
-$(NEWMAINFILE): $(PROJNAME).ino
-	cat $(ADIR)/arduino/sam/cores/arduino/main.cpp > $(NEWMAINFILE)
-	cat $(PROJNAME).ino >> $(NEWMAINFILE)
-	echo 'extern "C" void __cxa_pure_virtual() {while (true);}' >> $(NEWMAINFILE)
-
-#include the dependencies for our own files
--include $(MYOBJFILES:.o=.d)
-
-#create the core library from the core objects. Do this EXACTLY as the
-#arduino IDE does it, seems *really* picky about this.
-#Sorry for the hard coding.
-$(TMPDIR)/core.a: $(TMPDIR)/core $(COREOBJS) $(COREOBJSXX)
-	$(AR) rcs $(TMPDIR)/core.a $(TMPDIR)/core/wiring_shift.c.o 
-	$(AR) rcs $(TMPDIR)/core.a $(TMPDIR)/core/wiring_analog.c.o 
-	$(AR) rcs $(TMPDIR)/core.a $(TMPDIR)/core/itoa.c.o 
-	$(AR) rcs $(TMPDIR)/core.a $(TMPDIR)/core/cortex_handlers.c.o 
-	$(AR) rcs $(TMPDIR)/core.a $(TMPDIR)/core/hooks.c.o 
-	$(AR) rcs $(TMPDIR)/core.a $(TMPDIR)/core/wiring.c.o 
-	$(AR) rcs $(TMPDIR)/core.a $(TMPDIR)/core/WInterrupts.c.o 
-	$(AR) rcs $(TMPDIR)/core.a $(TMPDIR)/core/syscalls_sam3.c.o 
-	$(AR) rcs $(TMPDIR)/core.a $(TMPDIR)/core/iar_calls_sam3.c.o 
-	$(AR) rcs $(TMPDIR)/core.a $(TMPDIR)/core/wiring_digital.c.o 
-	$(AR) rcs $(TMPDIR)/core.a $(TMPDIR)/core/Print.cpp.o 
-	$(AR) rcs $(TMPDIR)/core.a $(TMPDIR)/core/USARTClass.cpp.o 
-	$(AR) rcs $(TMPDIR)/core.a $(TMPDIR)/core/WString.cpp.o 
-	$(AR) rcs $(TMPDIR)/core.a $(TMPDIR)/core/USBCore.cpp.o 
-	$(AR) rcs $(TMPDIR)/core.a $(TMPDIR)/core/CDC.cpp.o 
-	$(AR) rcs $(TMPDIR)/core.a $(TMPDIR)/core/HID.cpp.o 
-	$(AR) rcs $(TMPDIR)/core.a $(TMPDIR)/core/wiring_pulse.cpp.o 
-	$(AR) rcs $(TMPDIR)/core.a $(TMPDIR)/core/UARTClass.cpp.o 
-	$(AR) rcs $(TMPDIR)/core.a $(TMPDIR)/core/main.cpp.o 
-	$(AR) rcs $(TMPDIR)/core.a $(TMPDIR)/core/cxxabi-compat.cpp.o 
-	$(AR) rcs $(TMPDIR)/core.a $(TMPDIR)/core/Stream.cpp.o 
-	$(AR) rcs $(TMPDIR)/core.a $(TMPDIR)/core/RingBuffer.cpp.o 
-	$(AR) rcs $(TMPDIR)/core.a $(TMPDIR)/core/IPAddress.cpp.o 
-	$(AR) rcs $(TMPDIR)/core.a $(TMPDIR)/core/Reset.cpp.o 
-	$(AR) rcs $(TMPDIR)/core.a $(TMPDIR)/core/WMath.cpp.o 
-	$(AR) rcs $(TMPDIR)/core.a $(TMPDIR)/core/variant.cpp.o
-
-#link our own object files with core to form the elf file
-$(TMPDIR)/$(PROJNAME).elf: $(TMPDIR)/core.a $(TMPDIR)/core/syscalls_sam3.c.o $(MYOBJFILES) 
-	$(CXX) -Os -Wl,--gc-sections -mcpu=cortex-m3 -T$(ADIR)/$(SAM)/variants/arduino_due_x/linker_scripts/gcc/flash.ld -Wl,-Map,$(NEWMAINFILE).map -o $@ -L$(TMPDIR) -lm -lgcc -mthumb -Wl,--cref -Wl,--check-sections -Wl,--gc-sections -Wl,--entry=Reset_Handler -Wl,--unresolved-symbols=report-all -Wl,--warn-common -Wl,--warn-section-align -Wl,--warn-unresolved-symbols -Wl,--start-group $(TMPDIR)/core/syscalls_sam3.c.o $(MYOBJFILES) $(ADIR)/$(SAM)/variants/arduino_due_x/libsam_sam3x8e_gcc_rel.a $(TMPDIR)/core.a -Wl,--end-group
-
-#copy from the hex to our bin file (why?)
-$(TMPDIR)/$(PROJNAME).bin: $(TMPDIR)/$(PROJNAME).elf 
-	$(ADIR)/tools/g++_arm_none_eabi/bin/arm-none-eabi-objcopy -O binary $< $@
-
-#upload to the arduino by first resetting it (stty) and the running bossac
-upload: $(TMPDIR)/$(PROJNAME).bin
+# Program the device.  
+# step 1: reset the arduino board with the stty command
+# step 2: use bossac to upload the software
+.PHONY: upload
+upload: $(HEXNAME)
 	stty -F $(PORT) cs8 1200 hupcl
-	$(ADIR)/tools/bossac -U false -e -w $(VERIFY) -b $(TMPDIR)/$(PROJNAME).bin -R
+	$(BOSSAC) $(BOSSAC_FLAGS)
 
-#to view the serial port with screen.
-monitor:
-	screen $(PORT) 115200
+
+# === dependency handling ===
+# From the gnu make manual (section 4.14, Generating Prerequisites Automatically)
+# Additionally (because this will be the first executed rule) TMPDIRPATH is created here.
+# Instead of "sed" the "echo" command is used
+# cd $(TMPDIRPATH); mkdir -p $(DIRS) 2> /dev/null; cd ..
+DEPACTION=test -d $(TMPDIRPATH) || mkdir $(TMPDIRPATH);\
+mkdir -p $(addprefix $(TMPDIRPATH),$(DIRS));\
+set -e; echo -n $@ $(dir $@) > $@; $(CC) -MM $(COMMON_FLAGS) $< >> $@
+
+
+$(TMPDIRPATH)%.d: %.c
+	@$(DEPACTION)
+
+$(TMPDIRPATH)%.d: %.cc
+	@$(DEPACTION)
+
+$(TMPDIRPATH)%.d: %.cpp
+	@$(DEPACTION)
+
+# Include dependency files. If a .d file is missing, a warning is created and the .d file is created
+# This warning is not a problem (gnu make manual, section 3.3 Including Other Makefiles)
+-include $(addprefix $(TMPDIRPATH),$(DEPFILES))
+
+

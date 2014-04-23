@@ -6,22 +6,30 @@
 #include <Wire.h>
 #define LAB_CAL //calibrate the compass for home operation
 #include <PID_v1.h>
-#include <DueTimer.h>
 
 
 
 LSM303 compass;
 
-#define MAX_SPEED 40
-#define SLOW_SPEED 10
+#define MAX_SPEED 70
+#define SLOW_SPEED 1
+
+#define encoder0PinA  3
+#define encoder0PinB  4
+#define encoder1PinA  6
+#define encoder1PinB  7
 
 sharknado::Location loc;
 Sabertooth ST(128);
 
-volatile int counter=0;
+volatile long encoder0Pos=0;
+volatile long encoder1Pos=0;
+volatile int oldvalue1=0;
+volatile int oldvalue0=0;
+volatile int  totalEncoder0 = 0;
+volatile int totalEncoder1 = 0;
 
-
-#define mySerial Serial2
+#define mySerial Serial1
 Adafruit_GPS GPS(&mySerial);
 struct latlng
 {
@@ -29,7 +37,7 @@ struct latlng
     float lng;
 } ;
 
-latlng target1= {32.773467f, -117.073507f};
+latlng target1= {32.744899f, -117.137991f};
 
 //distance and heading to target
 float current_target_distance=0;
@@ -81,7 +89,18 @@ void setup() {
 
     Serial.begin(9600);
 
+ pinMode(encoder0PinA, INPUT);
+//  digitalWrite(encoder0PinA, HIGH);       // turn on pullup resistor
+  pinMode(encoder0PinB, INPUT);
+  //digitalWrite(encoder0PinB, HIGH);       // turn on pullup resistor
+  pinMode(encoder1PinA, INPUT);
+  //digitalWrite(encoder1PinA, HIGH);       // turn on pullup resistor
+  pinMode(encoder1PinB, INPUT);
+  //digitalWrite(encoder1PinB, HIGH);       // turn on pullup resistor
 
+ attachInterrupt(encoder0PinA, doEncoder, RISING);  // encoDER ON PIN 2
+ attachInterrupt(encoder1PinA, doEncoder1, RISING);
+	
 
     SabertoothTXPinSerial.begin(9600); // This is the baud rate you chose with the DIP switches.
     ST.autobaud();
@@ -89,9 +108,11 @@ void setup() {
     ST.turn(0);
 
 
+    //setup magnotometer
+	//interrupts for magnetometer
+	//attachInterrupt(22, handle_compass, RISING);
     Wire.begin();
     bool compass_status=compass.init();
-    Serial.print("Compass status: ");Serial.println(compass_status);
     compass.enableDefault();
 
 #ifdef HOME_CAL
@@ -99,19 +120,17 @@ void setup() {
     compass.m_min = (LSM303::vector<int16_t>) { -1028,   -784,  +2487};
     compass.m_max = (LSM303::vector<int16_t>) { +1121,  +1215,  +3276};
 #else
-//    //min: {  -617,  -1118,   +988}    max: { +1495,  +1025,  +1155} lab
-//    //min: {  -752,  -1401,  +2073}    max: { +1224,   +743,  +2942}
-//    //min: { -1970,  -2568,  +1301}    max: { +1620,   +912,  +1950} field
-//    //min: { -1563,  -1675,  +1059}    max: { +1797,  +1509,  +1723} outside parking
-//    //min: { -1028,   -784,  +2487}    max: { +1121,  +1215,  +3276} home
-//    //min: { -2024,  -1198,   +522}    max: {  +415,  +1047,  +1369} lab friday
-//    //min: { -2068,  -2272,   +360}    max: { +1358,   +783,  +1189} //outsite friday
-//    min: { -1809,  -1856,   +673}    max: { +1819,  +1571,  +1359}  field wed
+    //min: {  -617,  -1118,   +988}    max: { +1495,  +1025,  +1155} lab
+    //min: {  -752,  -1401,  +2073}    max: { +1224,   +743,  +2942}
+    //min: { -1970,  -2568,  +1301}    max: { +1620,   +912,  +1950} field
+    //min: { -1563,  -1675,  +1059}    max: { +1797,  +1509,  +1723} outside parking
+    //min: { -1028,   -784,  +2487}    max: { +1121,  +1215,  +3276} home
+    //min: { -2024,  -1198,   +522}    max: {  +415,  +1047,  +1369} lab friday
+    //min: { -2068,  -2272,   +360}    max: { +1358,   +783,  +1189} //outsite friday
 
-//
     Serial.println("Calibrating compass for lab mode");
-    compass.m_min = (LSM303::vector<int16_t>) { -1809,  -1856,   +673} ;
-    compass.m_max = (LSM303::vector<int16_t>) { +1819,  +1571,  +1359};
+    compass.m_min = (LSM303::vector<int16_t>) { -1970,  -2568,  +1301} ;
+    compass.m_max = (LSM303::vector<int16_t>) {+1620,   +912,  +1950};
 #endif
 
     heading_PID.SetMode(AUTOMATIC);
@@ -121,44 +140,48 @@ void setup() {
     speed_PID.SetOutputLimits(0,127);
 
     //HACK: hard code an initial drive power
-    //ST.drive(10);
-    
-    
-    //timer interrupt
-    Timer3.attachInterrupt(gps_interrupt);
-    Timer3.start(1000); // Calls every 50ms
+    ST.drive(40);
 
 }
 
+uint32_t timer = millis(); //get timestamp
 
 void loop() {
-  
-
+    GPS.read(); //required
     if (GPS.newNMEAreceived()) {
         if (!GPS.parse(GPS.lastNMEA()))
             return;
     }
-    if (GPS.fix) {
-        float lat = GPS.latitude;
-        float lon = GPS.longitude;
-        current_latlng.lat=loc.convertDegMinToDecDeg(lat);
-        current_latlng.lng=-loc.convertDegMinToDecDeg(lon);
-        current_gps_heading=GPS.angle;
-        current_gps_speed=GPS.speed;
 
-        update_dist_and_heading_to_target();
+    if (timer > millis())  timer = millis(); // if millis() or timer wraps around, we'll just reset it
 
-    }
+    if (millis() - timer > 2000) { //every 2 seconds
+        timer = millis(); // reset the timer
+        if (GPS.fix) {
+            float lat = GPS.latitude;
+            float lon = GPS.longitude;
+            current_latlng.lat=loc.convertDegMinToDecDeg(lat);
+            current_latlng.lng=-loc.convertDegMinToDecDeg(lon);
+            current_gps_heading=GPS.angle;
+            current_gps_speed=GPS.speed;
 
-    //compute expected shark speed every cycle
-    update_expected_speed();
+            update_dist_and_heading_to_target();
+
+        }
+
+        //compute expected shark speed every cycle
+        update_expected_speed();
 
 
 
-    Serial.print(current_latlng.lat, 9); Serial.print(", ");
-    Serial.print(current_latlng.lng, 9); Serial.print(", ");
-    Serial.print("distance: "); Serial.print(current_target_distance);Serial.print(", ");
-    Serial.print("GPS heading: "); Serial.print(current_target_heading);
+        //Serial.print(current_latlng.lat, 9); Serial.print(", ");
+        //Serial.print(current_latlng.lng, 9); Serial.print(", ");
+        //Serial.print("distance: "); Serial.print(current_target_distance);Serial.print(", ");
+        //Serial.print("initial heading: "); Serial.println(current_target_heading);
+
+
+    }//end timer
+
 
     //heading PID update
     compass.read();
@@ -170,18 +193,16 @@ void loop() {
 	
     //speed PID update
 //    speed_PID.Compute();
-    ST.drive(expected_speed);
+//    ST.drive(motor_speed_coeff);
 
 
 	//print heading info
-    Serial.print(", motor_turning_coeff:\t");
+    Serial.print("motor_turning_coeff:\t");
     Serial.print(turning);
     Serial.print(", ");
     Serial.print("current heading:\t");
-    Serial.print(current_heading);
-    Serial.print(", expected speed: \t");Serial.println(expected_speed);
-    
-    //Serial.print("1: "); Serial.print(encoder0Pos); Serial.print(", 2: "); Serial.println(encoder1Pos);	
+    Serial.println(current_heading);
+	
 	//print speed info
 //    Serial.print("Expected Speed: ");
 //    Serial.print(expected_speed);
@@ -200,24 +221,81 @@ void update_dist_and_heading_to_target()
     current_target_distance = results[0];
     current_target_heading = results[1];
 
-    expected_heading = aconv(current_target_heading);
-    
+    //just go north heading hack
+    expected_heading = 180;//current_target_heading;
 }
 
 void update_expected_speed()
 {
     if(current_target_distance > 19)       expected_speed=MAX_SPEED; //full speed for up to 20 meters to beacon
     else if(current_target_distance > 3)   expected_speed=SLOW_SPEED; //go slow for 17 meters
-    else if(current_target_distance > 0)   expected_speed=0; //this percission is questionable
+    else if(current_target_distance > 0)   expected_speed=1; //this percission is questionable
     else if(current_target_distance <=0)   expected_speed=0; //stop, we passed beacon.
 }
 
 
-void gps_interrupt()
+
+void doEncoder()
 {
-  counter++;
-  GPS.read();
+  int value0 = digitalRead(encoder0PinA);
+  if (value0 == oldvalue0)
+  {
+  }
+  else{
+
+    if (digitalRead(encoder0PinA) == digitalRead(encoder0PinB)) {
+      
+      encoder0Pos++;
+  
+      totalEncoder0++;
+  
+    } else {
+  
+      encoder0Pos--;
+  
+      totalEncoder0--;
+  
+    } 
+    oldvalue0 = value0;
+  }
 }
+
+void doEncoder1()
+{
+    int value1 = digitalRead(encoder1PinA);
+  if (value1 == oldvalue1)
+  {
+  }
+  else{
+
+    if (digitalRead(encoder1PinA) == digitalRead(encoder1PinB)) {
+  
+      encoder1Pos++;
+  
+      totalEncoder1++;
+  
+    } else {
+  
+      encoder1Pos--;
+  
+      totalEncoder1--;
+  
+    }
+                   oldvalue1 = value1;
+    }
+
+}
+
+void handle_compass()
+{
+	//I dont' know if this is a bad interrupt
+	//b/c sometimes the calls to mag
+	//can timeout -- take long time
+    compass.read();
+    double compass_reading=compass.heading();
+    current_heading = aconv(compass_reading);
+}
+
 
 //this scales a 0-360 heading to -180-180 for the PID library input
 float aconv(float theta)

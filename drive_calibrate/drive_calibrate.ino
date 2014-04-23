@@ -1,8 +1,10 @@
 // Tank-Style Sweep Sample for Packet Serial
 // Copyright (c) 2012 Dimension Engineering LLC
 // See license.txt for license details.
-
+#define encoder0PinA  3
+#define encoder0PinB  4
 #include <Sabertooth.h>
+//volatile long encoder0Pos=0;
 
 
 // Mixed mode is for tank-style diff-drive robots.
@@ -36,8 +38,12 @@ void setup()
   ST.turn(0);  // it has received power levels for BOTH throttle and turning, since it
                // mixes the two together to get diff-drive power levels for both motors.
                
-               
-               Serial.begin(9600);
+  pinMode(encoder0PinA, INPUT);
+  pinMode(encoder0PinB, INPUT);
+  attachInterrupt(3, doEncoder, RISING);  // encoDER ON PIN 2
+  Serial.begin (9600);
+  Serial.println("start");                // a personal 
+  
 }
 
 // The SLOW ramp here is turning, and the FAST ramp is throttle.
@@ -45,61 +51,79 @@ void setup()
 void loop()
 {
   int power;
-  int mag=15;
+  int mag=10;
   
   for (power = 0; power <= mag; power ++)
   {
     ST.drive(power);
-    Serial.print("drive power: "); Serial.println(power);
     delay(500);
+    
+   Serial.print ("pos = ");
+   Serial.println (encoder0Pos);
   }
-  
-  delay(2500);
-  
-  
-   int i=0;
-  // turn full left
-  Serial.println("turning full left...");
-  for (; i > -mag; i--)
-  {
-    ST.turn(i);
-    Serial.print("turn power: "); Serial.println(i);
-    delay(500);
-  }
-  
-  Serial.println("start turning from full left to full right...");
-  for(;i<mag;i++)
-  {
-    ST.turn(i);
-    Serial.print("turn power: "); Serial.println(i);
-    delay(500);
-  }
-  
- 
-  delay(1000);
-  
-  //turn back to 0
-  for (;i > 0; i --)
-  {
-    ST.turn(i);
-    Serial.print("turn power: "); Serial.println(i);
-    delay(500);
-  }
-  
-  Serial.println("should be going straight at 15 speed");
-  delay(1000);
-  
-
-  Serial.println("slowing down");
-  for (;power > 0; power--)
+  for (; power > 0; power --)
   {
     ST.drive(power);
-    Serial.print("drive power: "); Serial.println(power);
-    delay(1000);
+    delay(500);
+   Serial.print ("pos = ");
+   Serial.println (encoder0Pos);
   }
-
-  Serial.println("DONE");
   
-  delay(2500);
+//  delay(2500);
+//  
+//  
+//   int i=0;
+//  // turn full left
+//  Serial.println("turning full left...");
+//  for (; i > -mag; i--)
+//  {
+//    ST.turn(i);
+//    Serial.print("turn power: "); Serial.println(i);
+//    delay(500);
+//  }
+//  
+//  Serial.println("start turning from full left to full right...");
+//  for(;i<mag;i++)
+//  {
+//    ST.turn(i);
+//    Serial.print("turn power: "); Serial.println(i);
+//    delay(500);
+//  }
+//  
+// 
+//  delay(1000);
+//  
+//  //turn back to 0
+//  for (;i > 0; i --)
+//  {
+//    ST.turn(i);
+//    Serial.print("turn power: "); Serial.println(i);
+//    delay(500);
+//  }
+//  
+//  Serial.println("should be going straight at 15 speed");
+//  delay(1000);
+//  
+//
+//  Serial.println("slowing down");
+//  for (;power > 0; power--)
+//  {
+//    ST.drive(power);
+//    Serial.print("drive power: "); Serial.println(power);
+//    delay(1000);
+//  }
+//
+//  Serial.println("DONE");
+//  
+//  delay(2500);
 
+}
+
+void doEncoder()
+{
+  if (digitalRead(encoder0PinA) == digitalRead(encoder0PinB)) {
+    encoder0Pos++;
+  } else {
+    encoder0Pos--;
+  }
 }
