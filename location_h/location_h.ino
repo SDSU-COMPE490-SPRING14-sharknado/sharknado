@@ -7,10 +7,17 @@
 #define LAB_CAL //calibrate the compass for home operation
 #include <PID_v1.h>
 #include <DueTimer.h>
-#include <Servo.h> 
+#include <Servo.h> //must include here to to link in payloaddumper.cpp
+#include "ProximitySensor.h"
+#include "PayloadDumper.h"
+#include "BeaconSensor.h"
+#define ARDUINO
+using namespace sharknado;
 
 
-LSM303 compass;
+enum STATES { SEARCH, BEACON, ESCAPE, DONE_WAIT };
+int state; //0,1,2 = search, beacon, obstacle
+int next_state;
 
 #define MAX_SPEED 40
 #define SLOW_SPEED 20
@@ -19,24 +26,23 @@ LSM303 compass;
 #define MAG_LED 51
 #define BTN_PIN 49
 
-sharknado::Location loc;
+LSM303 compass;
+Location loc;
+ProximitySensor ultra1; //left
+ProximitySensor ultra2; //center
+ProximitySensor ultra3; //right
+PayloadDumper payload;
+BeaconSensor beacon_sensor;
 Sabertooth ST(128);
-volatile int counter=0;
-
-
 Adafruit_GPS GPS(&GPS_SERIAL);
-struct latlng
-{
-    float lat;
-    float lng;
-} ;
 
-latlng target1= {32.773584f, -117.073308f};
-latlng target2= {32.773834f, -117.073419f};
-latlng target3= {32.773660f, -117.072823f};
-latlng finish= {32.773892f, -117.072835f};
-latlng GPScord[] = {target1,target2,target3,finish};
-volatile int GPScounter=1;
+Location::latlng target1= {32.773467f, -117.073507f};
+Location::latlng target2= {32.773467f, -117.073507f};
+Location::latlng target3= {32.773467f, -117.073507f};
+Location::latlng home= {32.773467f, -117.073507f};
+
+int target_index=0;
+Location::latlng targets [] = {target1, target2, target3, home};
 
 //distance and heading to target
 float current_target_distance=0;
@@ -44,8 +50,8 @@ double current_target_heading=0;
 double compass_reading = 0;
 
 //trusted lat lng
-latlng current_latlng;
-latlng current_gps_latlng;
+Location::latlng current_latlng;
+Location::latlng current_gps_latlng;
 
 //this is the trusted heading that stearing will rely upon. It should be the output of some (Kalman) filter
 //which will be a function of magnetometer and GPS
@@ -63,17 +69,21 @@ float current_encoder_speed=0;
 double expected_speed=0;
 bool northflag = false;
 
+//maybe update these values w/ interrupt?
+bool collision=false; //call ultrasonic proximity routine
+bool beacon_range=false; //call bacon proximity routine
+
 
 //Specify the links and initial tuning parameters
 //PID heading_PID(&current_heading, &motor_turning_coeff, &expected_heading, 2,.1,0, DIRECT);
 PID  heading_PID(&compass_reading, &motor_turning_coeff, &current_target_heading, 2,.1,0, DIRECT);
 PID speed_PID  (&current_speed, &motor_speed_coeff, &expected_speed, 2,5,1, DIRECT);
 
-//Sevo Code
-Servo myservo;  // create servo object to control a servo 
-                // twelve servo objects can be created on most boards
+
                 
 void setup() {
+	//start in search mode
+	next_state=SEARCH;
 
     // Set uop led Pins
       pinMode(GPS_LED,OUTPUT);
@@ -133,25 +143,16 @@ void setup() {
     compass.m_max = (LSM303::vector<int16_t>){ +2042,   +774,   +674};
 #endif
 
-
-
-    //HACK: hard code an initial drive power
-    //ST.drive(10);
-    
     
     //timer interrupt 
-    //Must uncomment line in header file to allow for use with servo.h
-    Timer6.attachInterrupt(gps_interrupt); // have to change to timer 6 in order for it to work with servo
-    Timer6.start(1000); // Calls every 50ms
-    
-    //servo pin attachment
-       myservo.attach(8);  // attaches the servo on pin 8 to the servo object 
-       compass.read();
-       compass_reading=compass.heading();
-       current_heading = aconv(compass_reading);
+    Timer.getAvailable().attachInterrupt(gps_interrupt).start(1000); // Calls every 50ms
+     
+     compass.read();
+     compass_reading=compass.heading();
+     current_heading = aconv(compass_reading);
     
     // loop to see if gps and navigation are set up
-        myservo.write(180); // lock the payload?
+  
 		
       while (current_heading!=current_heading) //wait for magnetometer reading, nan != nan is always true
       {
@@ -197,7 +198,64 @@ void setup() {
 
 
 void loop() {
-  
+	
+	//next state logic
+	state=next_state;
+
+	if(state==SEARCH) 		search_routine();
+	else if(state==BEACON) 	beacon_search_routine();
+	else if(state==ESCAPE)	escape_routine();
+	else if(state==DONE_WAIT)done_wait();
+
+}//end loop
+
+void update_dist_and_heading_to_target()
+{
+    float results [3];
+    loc.computeDistanceAndBearing(current_latlng.lat, current_latlng.lng, target1.lat, target1.lng, results);
+    current_target_distance = results[0];
+    current_target_heading = results[1];
+   Serial.println(current_target_heading);
+    if (current_target_heading<270){  //Checks if heading is in the southern hemisphere 
+       if (current_target_heading>90){
+
+        northflag=false; // if it is then north flag is false
+       }else
+      {
+              compass_reading = aconv(compass_reading);//convert to northern heading or -180 to 180
+              current_target_heading = aconv(current_target_heading);
+              northflag=true;
+       }
+      }
+    else{
+              compass_reading = aconv(compass_reading);//convert to northern heading or -180 to 180
+              current_target_heading = aconv(current_target_heading);
+              northflag=true;
+    }
+}
+
+void update_expected_speed()
+{
+    if(current_target_distance > 9)       expected_speed=MAX_SPEED; //full speed for up to 20 meters to beacon
+    else if(current_target_distance > 3)   expected_speed=SLOW_SPEED; //go slow for 17 meters
+    else if(current_target_distance > 0) expected_speed=0; //this percission is questionable
+    else if(current_target_distance <=0)   expected_speed=0; //stop, we passed beacon.
+}
+
+
+void gps_interrupt()
+{
+  GPS.read();
+}
+
+
+
+void search_routine()
+{	
+  if(collision) next_state=ESCAPE;
+  else if(beacon_range) next_state=BEACON;
+  else if(current_target_distance < 3) next_state=BEACON; //hack until we get beacon RF sensor
+	
     if (GPS.newNMEAreceived()) {
         if (!GPS.parse(GPS.lastNMEA()))
             return;
@@ -248,93 +306,54 @@ void loop() {
     Serial.print("current heading:\t");
     Serial.print(compass_reading);
     Serial.print(", expected speed: \t");Serial.println(expected_speed);
-    
-
-}//end loop
-
-void update_dist_and_heading_to_target()
-{
-    float results [3];
-    loc.computeDistanceAndBearing(current_latlng.lat, current_latlng.lng, target1.lat, target1.lng, results);
-    current_target_distance = results[0];
-    current_target_heading = results[1];
-   Serial.println(current_target_heading);
-    if (current_target_heading<270){  //Checks if heading is in the southern hemisphere 
-       if (current_target_heading>90){
-
-        northflag=false; // if it is then north flag is false
-       }else
-      {
-              compass_reading = aconv(compass_reading);//convert to northern heading or -180 to 180
-              current_target_heading = aconv(current_target_heading);
-              northflag=true;
-       }
-      }
-    else{
-              compass_reading = aconv(compass_reading);//convert to northern heading or -180 to 180
-              current_target_heading = aconv(current_target_heading);
-              northflag=true;
-    }
 }
 
-void update_expected_speed()
+void beacon_search_routine()
 {
-    if(current_target_distance > 9)       expected_speed=MAX_SPEED; //full speed for up to 20 meters to beacon
-    else if(current_target_distance > 3)   expected_speed=SLOW_SPEED; //go slow for 17 meters
-    else if(current_target_distance > 0)   
-      {
-        expected_speed=0; //this percission is questionable
-        dispense_ball(); // calls the ball dropping function
-      }
-    else if(current_target_distance <=0)   expected_speed=0; //stop, we passed beacon.
+	//Drive forward slowly until RSSI is > 90
+        //then drop ball
+        ST.drive(SLOW_SPEED);
+
+	//drop golf ball at some point
+   //this is hacked to return random number between 50 and 100
+	int rssi = beacon_sensor.sample();
+        Serial.print("RSSI: ");Serial.println(rssi);
+
+	if(rssi>90)
+	{
+                
+		payload.dump(); //payload lib
+
+		//set the next target 	//set next state
+		target_index++;
+		if( (target_index % 4) == 0) next_state=DONE_WAIT; //you are home, stop
+		else next_state = SEARCH; //search for next target
+	}
 }
 
-
-void gps_interrupt()
+void escape_routine()
 {
-  GPS.read();
+	// cout << "obstacle..." << endl;
+	bool collision=((rand()%10)>0); //hack to fake ultrasonic sensor hit
+	
+        if(collision) next_state=ESCAPE;
+	else next_state=SEARCH; //clear of obstacle, go back to normal search
+
+
+	//implement escape logic?
+	//just slow down and make a sharp left or right turn
+	//ST.power(LOW);
+	//ST.turn(MAX_TURN);
 }
 
-void dispense_ball()
+//this is just the busy wait
+//the robot shouldn't do anything
+void done_wait()
 {
-    Serial.println("Dropping Ball");
-    int n;
-    ST.drive(0);
-    ST.turn(0);
-    myservo.write(0);
-    for (n=0; n<5;n+=1)
-    {
-      myservo.write(180);
-      delay(500); 
-      myservo.write(150);
-      delay(500); 
-    }
-    myservo.write(0);
-    delay(3000); 
-    for (n=0; n<5;n+=1)
-    {
-      myservo.write(30);
-      delay(500); 
-      myservo.write(0);
-      delay(500); 
-    }
-    
-    myservo.write(180);
-    if (GPScounter<4){
-      target1 = GPScord[GPScounter];
-      GPScounter++;
-    }
-    else
-    {
-       while(1)
-      {
-         ST.drive(0); // if at home location then do nothing and turn LEDS on
-         ST.turn(0);
-         digitalWrite(GPS_LED, HIGH);
-         digitalWrite(MAG_LED, HIGH);
-      } 
-    }
+	Serial.println("finished work, home");
+	return;
 }
+
 
 //this scales a 0-360 heading to -180-180 for the PID library input
 float aconv(float theta)

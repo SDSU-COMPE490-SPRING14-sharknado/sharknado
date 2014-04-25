@@ -17,6 +17,13 @@ public:
 	void computeDistanceAndBearing(double lat1, double lon1,
           double lat2, double lon2, float * results);
 	double convertDegMinToDecDeg (float degMin);
+        
+        struct latlng
+        {
+            float lat;
+            float lng;
+        } ;
+
 
 };
 
