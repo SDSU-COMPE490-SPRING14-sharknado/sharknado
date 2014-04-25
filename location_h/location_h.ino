@@ -21,7 +21,7 @@ Sabertooth ST(128);
 volatile int counter=0;
 
 
-#define mySerial Serial2
+#define mySerial Serial2 //had to hack adafruit lib to use Serial2
 Adafruit_GPS GPS(&mySerial);
 struct latlng
 {
@@ -93,22 +93,19 @@ void setup() {
     bool compass_status=compass.init();
     Serial.print("Compass status: ");Serial.println(compass_status);
     compass.enableDefault();
-
-#ifdef HOME_CAL
-    Serial.println("Calibrating compass for home mode");
-    compass.m_min = (LSM303::vector<int16_t>) { -1028,   -784,  +2487};
-    compass.m_max = (LSM303::vector<int16_t>) { +1121,  +1215,  +3276};
-#else
 //    //min: {  -617,  -1118,   +988}    max: { +1495,  +1025,  +1155} lab
 //    //min: {  -752,  -1401,  +2073}    max: { +1224,   +743,  +2942}
 //    //min: { -1970,  -2568,  +1301}    max: { +1620,   +912,  +1950} field
 //    //min: { -1563,  -1675,  +1059}    max: { +1797,  +1509,  +1723} outside parking
 //    //min: { -1028,   -784,  +2487}    max: { +1121,  +1215,  +3276} home
 //    //min: { -2024,  -1198,   +522}    max: {  +415,  +1047,  +1369} lab friday
-//    //min: { -2068,  -2272,   +360}    max: { +1358,   +783,  +1189} //outsite friday
-//    min: { -1809,  -1856,   +673}    max: { +1819,  +1571,  +1359}  field wed
-
-//
+//    //min: { -2068,  -2272,   +360}    max: { +1358,   +783,  +1189}  outsite friday
+//      min: { -1809,  -1856,   +673}    max: { +1819,  +1571,  +1359}  field wed
+#ifdef HOME_CAL
+    Serial.println("Calibrating compass for home mode");
+    compass.m_min = (LSM303::vector<int16_t>) { -1028,   -784,  +2487};
+    compass.m_max = (LSM303::vector<int16_t>) { +1121,  +1215,  +3276};
+#else
     Serial.println("Calibrating compass for lab mode");
     compass.m_min = (LSM303::vector<int16_t>) { -1809,  -1856,   +673} ;
     compass.m_max = (LSM303::vector<int16_t>) { +1819,  +1571,  +1359};
@@ -126,7 +123,7 @@ void setup() {
     
     //timer interrupt
     Timer3.attachInterrupt(gps_interrupt);
-    Timer3.start(1000); // Calls every 50ms
+    Timer3.start(1000); // Calls every 1ms
 
 }
 
@@ -171,6 +168,8 @@ void loop() {
     //speed PID update
 //    speed_PID.Compute();
     ST.drive(expected_speed);
+    int coeff=expected_speed/5;
+    heading_PID.SetOutputLimits(-coeff,coeff); //turning is  a function of speed
 
 
 	//print heading info
@@ -213,6 +212,7 @@ void update_expected_speed()
 }
 
 
+//timer interrupt
 void gps_interrupt()
 {
   counter++;
