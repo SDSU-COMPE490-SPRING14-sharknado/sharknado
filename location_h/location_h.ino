@@ -80,18 +80,18 @@ PID  heading_PID(&compass_reading, &motor_turning_coeff, &current_target_heading
 PID speed_PID  (&current_speed, &motor_speed_coeff, &expected_speed, 2,5,1, DIRECT);
 
 
-                
+
 void setup() {
-	//start in search mode
-	next_state=SEARCH;
+    //start in search mode
+    next_state=SEARCH;
 
     // Set uop led Pins
-      pinMode(GPS_LED,OUTPUT);
-      pinMode(MAG_LED,OUTPUT);
-      pinMode(BTN_PIN,INPUT);
-      digitalWrite(GPS_LED, LOW);
-      digitalWrite(MAG_LED, LOW);
-      digitalWrite(BTN_PIN, HIGH); //writing to an input?
+    pinMode(GPS_LED,OUTPUT);
+    pinMode(MAG_LED,OUTPUT);
+    pinMode(BTN_PIN,INPUT);
+    digitalWrite(GPS_LED, LOW);
+    digitalWrite(MAG_LED, LOW);
+    digitalWrite(BTN_PIN, HIGH); //writing to an input?
 
     // 9600 NMEA is the default baud rate for Adafruit MTK GPS's- some use 4800
     Serial.begin(9600);
@@ -119,13 +119,18 @@ void setup() {
 
     Wire.begin();
     bool compass_status=compass.init();
-    Serial.print("Compass status: ");Serial.println(compass_status);
+    Serial.print("Compass status: ");
+    Serial.println(compass_status);
     compass.enableDefault();
 
 #ifdef HOME_CAL
     Serial.println("Calibrating compass for home mode");
-    compass.m_min = (LSM303::vector<int16_t>) { -1028,   -784,  +2487};
-    compass.m_max = (LSM303::vector<int16_t>) { +1121,  +1215,  +3276};
+    compass.m_min = (LSM303::vector<int16_t>) {
+        -1028,   -784,  +2487
+    };
+    compass.m_max = (LSM303::vector<int16_t>) {
+        +1121,  +1215,  +3276
+    };
 #else
 //    //min: {  -617,  -1118,   +988}    max: { +1495,  +1025,  +1155} lab
 //    //min: {  -752,  -1401,  +2073}    max: { +1224,   +743,  +2942}
@@ -139,58 +144,62 @@ void setup() {
 
 //
     Serial.println("Calibrating compass for lab mode");
-    compass.m_min = (LSM303::vector<int16_t>) { -1253,  -2072,   -244} ;
-    compass.m_max = (LSM303::vector<int16_t>){ +2042,   +774,   +674};
+    compass.m_min = (LSM303::vector<int16_t>) {
+        -1253,  -2072,   -244
+    } ;
+    compass.m_max = (LSM303::vector<int16_t>) {
+        +2042,   +774,   +674
+    };
 #endif
 
-    
-    //timer interrupt 
+
+    //timer interrupt
     Timer.getAvailable().attachInterrupt(gps_interrupt).start(1000); // Calls every 50ms
-     
-     compass.read();
-     compass_reading=compass.heading();
-     current_heading = aconv(compass_reading);
-    
+
+    compass.read();
+    compass_reading=compass.heading();
+    current_heading = aconv(compass_reading);
+
     // loop to see if gps and navigation are set up
-  
-		
-      while (current_heading!=current_heading) //wait for magnetometer reading, nan != nan is always true
-      {
-          compass_reading=compass.heading();
-          current_heading = aconv(compass_reading);
-          Serial.print("Magnetometer is not set up...Please unplug and try again");
-          digitalWrite(MAG_LED, LOW);
-      }
-      digitalWrite(MAG_LED, HIGH); //turn Yellow LED on
-	  
-	  
-      while (!GPS.fix) //wait for a GPS fix
-      {
-		  //need these two lines to run functions. probably don't need in if statements but I'm to lazy to change it
-         // if (GPS.newNMEAreceived()) { 
-         //    GPS.parse(GPS.lastNMEA());
-         // } why do you need any of this?
-		  
-          Serial.println("No GPS Fix...Please Hold"); 
-          digitalWrite(GPS_LED, LOW);
-      }
-      digitalWrite(GPS_LED, HIGH); //Turn Red LED on
+
+
+    while (current_heading!=current_heading) //wait for magnetometer reading, nan != nan is always true
+    {
+        compass_reading=compass.heading();
+        current_heading = aconv(compass_reading);
+        Serial.print("Magnetometer is not set up...Please unplug and try again");
+        digitalWrite(MAG_LED, LOW);
+    }
+    digitalWrite(MAG_LED, HIGH); //turn Yellow LED on
+
+
+    while (!GPS.fix) //wait for a GPS fix
+    {
+        //need these two lines to run functions. probably don't need in if statements but I'm to lazy to change it
+        // if (GPS.newNMEAreceived()) {
+        //    GPS.parse(GPS.lastNMEA());
+        // } why do you need any of this?
+
+        Serial.println("No GPS Fix...Please Hold");
+        digitalWrite(GPS_LED, LOW);
+    }
+    digitalWrite(GPS_LED, HIGH); //Turn Red LED on
 
     update_dist_and_heading_to_target(); //calculate heading and distance
-    
+
     //initialize PIDs
     heading_PID.SetMode(AUTOMATIC);
     heading_PID.SetOutputLimits(-7,7);
     speed_PID.SetMode(AUTOMATIC);
     speed_PID.SetOutputLimits(0,50);
-    
+
     while(digitalRead(BTN_PIN)==HIGH) //wait until button is pressed
-      {  
+    {
         Serial.println("I'm waiting for you to push the button!");
-      }
-      digitalWrite(GPS_LED, LOW); //turn LEDs off 
-      digitalWrite(MAG_LED, LOW);
-      delay(1000); //wait a second then GO!
+    }
+    digitalWrite(GPS_LED, LOW); //turn LEDs off
+    digitalWrite(MAG_LED, LOW);
+    delay(1000); //wait a second then GO!
 
 
 
@@ -198,14 +207,14 @@ void setup() {
 
 
 void loop() {
-	
-	//next state logic
-	state=next_state;
 
-	if(state==SEARCH) 		search_routine();
-	else if(state==BEACON) 	beacon_search_routine();
-	else if(state==ESCAPE)	escape_routine();
-	else if(state==DONE_WAIT)done_wait();
+    //next state logic
+    state=next_state;
+
+    if(state==SEARCH) 		search_routine();
+    else if(state==BEACON) 	beacon_search_routine();
+    else if(state==ESCAPE)	escape_routine();
+    else if(state==DONE_WAIT)done_wait();
 
 }//end loop
 
@@ -215,22 +224,22 @@ void update_dist_and_heading_to_target()
     loc.computeDistanceAndBearing(current_latlng.lat, current_latlng.lng, target1.lat, target1.lng, results);
     current_target_distance = results[0];
     current_target_heading = results[1];
-   Serial.println(current_target_heading);
-    if (current_target_heading<270){  //Checks if heading is in the southern hemisphere 
-       if (current_target_heading>90){
+    Serial.println(current_target_heading);
+    if (current_target_heading<270) { //Checks if heading is in the southern hemisphere
+        if (current_target_heading>90) {
 
-        northflag=false; // if it is then north flag is false
-       }else
-      {
-              compass_reading = aconv(compass_reading);//convert to northern heading or -180 to 180
-              current_target_heading = aconv(current_target_heading);
-              northflag=true;
-       }
-      }
-    else{
-              compass_reading = aconv(compass_reading);//convert to northern heading or -180 to 180
-              current_target_heading = aconv(current_target_heading);
-              northflag=true;
+            northflag=false; // if it is then north flag is false
+        } else
+        {
+            compass_reading = aconv(compass_reading);//convert to northern heading or -180 to 180
+            current_target_heading = aconv(current_target_heading);
+            northflag=true;
+        }
+    }
+    else {
+        compass_reading = aconv(compass_reading);//convert to northern heading or -180 to 180
+        current_target_heading = aconv(current_target_heading);
+        northflag=true;
     }
 }
 
@@ -245,17 +254,17 @@ void update_expected_speed()
 
 void gps_interrupt()
 {
-  GPS.read();
+    GPS.read();
 }
 
 
 
 void search_routine()
-{	
-  if(collision) next_state=ESCAPE;
-  else if(beacon_range) next_state=BEACON;
-  else if(current_target_distance < 3) next_state=BEACON; //hack until we get beacon RF sensor
-	
+{
+    if(collision) next_state=ESCAPE;
+    else if(beacon_range) next_state=BEACON;
+    else if(current_target_distance < 3) next_state=BEACON; //hack until we get beacon RF sensor
+
     if (GPS.newNMEAreceived()) {
         if (!GPS.parse(GPS.lastNMEA()))
             return;
@@ -271,87 +280,94 @@ void search_routine()
     }
     else
     {
-      Serial.println("no fix on the gps");
+        Serial.println("no fix on the gps");
     }
 
     //compute expected shark speed every cycle
     update_expected_speed();
 
-    Serial.print(current_latlng.lat, 9); Serial.print(", ");
-    Serial.print(current_latlng.lng, 9); Serial.print(", ");
-    Serial.print("distance: "); Serial.print(current_target_distance);Serial.print(", ");
-    Serial.print("GPS heading: "); Serial.print(current_target_heading);
+    Serial.print(current_latlng.lat, 9);
+    Serial.print(", ");
+    Serial.print(current_latlng.lng, 9);
+    Serial.print(", ");
+    Serial.print("distance: ");
+    Serial.print(current_target_distance);
+    Serial.print(", ");
+    Serial.print("GPS heading: ");
+    Serial.print(current_target_heading);
 
     //heading PID update
     compass.read();
     compass_reading=compass.heading();
-    if (northflag){
-      compass_reading = aconv(compass_reading); //if in northern hemisphere must convert. must have this because compass.read is called after distance update function
+    if (northflag) {
+        compass_reading = aconv(compass_reading); //if in northern hemisphere must convert. must have this because compass.read is called after distance update function
     }
     heading_PID.Compute();
     double turning=-motor_turning_coeff; //negate to steer correctly
     ST.turn(turning);
-	
+
     //speed PID update
 //    speed_PID.Compute();
     ST.drive(expected_speed);
-	
-	int coeff=expected_speed/5;
-	heading_PID.SetOutputLimits(-coeff,coeff); //turning is  a function of speed
 
-	//print heading info
+    int coeff=expected_speed/5;
+    heading_PID.SetOutputLimits(-coeff,coeff); //turning is  a function of speed
+
+    //print heading info
     Serial.print(", motor_turning_coeff:\t");
     Serial.print(turning);
     Serial.print(", ");
     Serial.print("current heading:\t");
     Serial.print(compass_reading);
-    Serial.print(", expected speed: \t");Serial.println(expected_speed);
+    Serial.print(", expected speed: \t");
+    Serial.println(expected_speed);
 }
 
 void beacon_search_routine()
 {
-	//Drive forward slowly until RSSI is > 90
-        //then drop ball
-        ST.drive(SLOW_SPEED);
+    //Drive forward slowly until RSSI is > 90
+    //then drop ball
+    ST.drive(SLOW_SPEED);
 
-	//drop golf ball at some point
-   //this is hacked to return random number between 50 and 100
-	int rssi = beacon_sensor.sample();
-        Serial.print("RSSI: ");Serial.println(rssi);
+    //drop golf ball at some point
+    //this is hacked to return random number between 50 and 100
+    int rssi = beacon_sensor.sample();
+    Serial.print("RSSI: ");
+    Serial.println(rssi);
 
-	if(rssi>90)
-	{
-                
-		payload.dump(); //payload lib
+    if(rssi>90)
+    {
 
-		//set the next target 	//set next state
-		target_index++;
-		if( (target_index % 4) == 0) next_state=DONE_WAIT; //you are home, stop
-		else next_state = SEARCH; //search for next target
-	}
+        payload.dump(); //payload lib
+
+        //set the next target 	//set next state
+        target_index++;
+        if( (target_index % 4) == 0) next_state=DONE_WAIT; //you are home, stop
+        else next_state = SEARCH; //search for next target
+    }
 }
 
 void escape_routine()
 {
-	// cout << "obstacle..." << endl;
-	bool collision=((rand()%10)>0); //hack to fake ultrasonic sensor hit
-	
-        if(collision) next_state=ESCAPE;
-	else next_state=SEARCH; //clear of obstacle, go back to normal search
+    // cout << "obstacle..." << endl;
+    bool collision=((rand()%10)>0); //hack to fake ultrasonic sensor hit
+
+    if(collision) next_state=ESCAPE;
+    else next_state=SEARCH; //clear of obstacle, go back to normal search
 
 
-	//implement escape logic?
-	//just slow down and make a sharp left or right turn
-	//ST.power(LOW);
-	//ST.turn(MAX_TURN);
+    //implement escape logic?
+    //just slow down and make a sharp left or right turn
+    //ST.power(LOW);
+    //ST.turn(MAX_TURN);
 }
 
 //this is just the busy wait
 //the robot shouldn't do anything
 void done_wait()
 {
-	Serial.println("finished work, home");
-	return;
+    Serial.println("finished work, home");
+    return;
 }
 
 
