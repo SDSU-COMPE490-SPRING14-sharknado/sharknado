@@ -4,13 +4,13 @@
 #include <Sabertooth.h>
 #include <LSM303.h>
 #include <Wire.h>
-#define LAB_CAL //calibrate the compass for home operation
 #include <PID_v1.h>
 #include <DueTimer.h>
 #include <Servo.h> //must include here to to link in payloaddumper.cpp
 #include "ProximitySensor.h"
 #include "PayloadDumper.h"
 #include "BeaconSensor.h"
+#define LAB_CAL //calibrate the compass for home operation
 #define ARDUINO
 using namespace sharknado;
 
@@ -104,7 +104,6 @@ void setup() {
     // Request updates on antenna status, comment out to keep quiet
     GPS.sendCommand(PGCMD_ANTENNA);
 
-
     delay(1000);
     // Ask for firmware version
     GPS_SERIAL.println(PMTK_Q_RELEASE);
@@ -156,45 +155,12 @@ void setup() {
     //timer interrupt for GPS
     Timer.getAvailable().attachInterrupt(gps_interrupt).start(1000); // Calls every 50ms
 
-    compass.read();
-    compass_reading=compass.heading();
-    current_heading = aconv(compass_reading);
-
-    // loop to see if gps and navigation are set up
-    while (current_heading!=current_heading) //wait for magnetometer reading, nan != nan is always true
-    {
-        compass_reading=compass.heading();
-        current_heading = aconv(compass_reading);
-        Serial.print("Magnetometer is not set up...Please unplug and try again");
-        digitalWrite(MAG_LED, LOW);
-    }
-    digitalWrite(MAG_LED, HIGH); //turn Yellow LED on
-
-
-    while (!GPS.fix) //wait for a GPS fix
-    {
-        //need these two lines to run functions. probably don't need in if statements but I'm to lazy to change it
-        // if (GPS.newNMEAreceived()) {
-        //    GPS.parse(GPS.lastNMEA());
-        // } why do you need any of this?
-
-        Serial.println("No GPS Fix...Please Hold");
-        digitalWrite(GPS_LED, LOW);
-    }
-    digitalWrite(GPS_LED, HIGH); //Turn Red LED on
-
-    update_dist_and_heading_to_target(); //calculate heading and distance
-
     //initialize PIDs
     heading_PID.SetMode(AUTOMATIC);
     heading_PID.SetOutputLimits(-7,7);
 
     speed_PID.SetMode(AUTOMATIC);
     speed_PID.SetOutputLimits(0,50);
-
-
-
-
 
 }
 
@@ -212,20 +178,49 @@ void loop() {
 
 }//end loop
 
-
-
+bool mag_ready=false;
+bool gps_ready=false;
 void start_routine()
 {
+    //wait for Mag. to initialize
+    compass.read();
+    compass_reading=compass.heading();
+    current_heading = aconv(compass_reading);
+    if (current_heading!=current_heading) //wait for magnetometer reading, nan != nan is always true
+    {
+        Serial.print("Magnetometer is not set up...Please unplug and try again");
+        digitalWrite(MAG_LED, LOW);
+    }
+    else //mag is ready
+    {
+        mag_ready=true;
+        digitalWrite(MAG_LED, HIGH); //turn Yellow LED on
+    }
+
+    //GPS Check
+    if (!GPS.fix)
+    {
+        Serial.println("No GPS Fix...Please Hold");
+        digitalWrite(GPS_LED, LOW);
+    }
+    else //GPS fix initiated
+    {
+        gps_ready=true;
+        digitalWrite(GPS_LED, HIGH); //Turn Red LED on
+    }
+
+
+    //Button check
     if(digitalRead(BTN_PIN)==HIGH) //btn is pressed
     {
         Serial.println("I'm waiting for you to push the button!");
 
     }
-    else
+    else if(digitalRead(BTN_PIN)==HIGH && mag_ready && gps_ready)
     {
         digitalWrite(GPS_LED, LOW); //turn LEDs off
         digitalWrite(MAG_LED, LOW);
-        
+
         next_state=SEARCH;
         delay(1000); //wait a second then GO!
     }
