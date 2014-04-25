@@ -216,8 +216,9 @@ void start_routine()
         Serial.println("I'm waiting for you to push the button!");
 
     }
-    else if(digitalRead(BTN_PIN)==HIGH && mag_ready && gps_ready)
+    else if(digitalRead(BTN_PIN)==LOW && mag_ready && gps_ready)
     {
+		Serial.println("Starting sharknado...");
         digitalWrite(GPS_LED, LOW); //turn LEDs off
         digitalWrite(MAG_LED, LOW);
 
