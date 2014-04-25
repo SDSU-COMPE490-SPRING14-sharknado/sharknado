@@ -208,7 +208,7 @@ void loop() {
     else if(state==SEARCH) 	search_routine();
     else if(state==BEACON) 	beacon_search_routine();
     else if(state==ESCAPE)	escape_routine();
-    else if(state==DONE_WAIT)done_wait();
+    else if(state==DONE_WAIT)   done_wait();
 
 }//end loop
 
@@ -218,14 +218,16 @@ void start_routine()
 {
     if(digitalRead(BTN_PIN)==HIGH) //btn is pressed
     {
-        digitalWrite(GPS_LED, LOW); //turn LEDs off
-        digitalWrite(MAG_LED, LOW);
-        next_state=SEARCH;
-        delay(1000); //wait a second then GO!
+        Serial.println("I'm waiting for you to push the button!");
+
     }
     else
     {
-        Serial.println("I'm waiting for you to push the button!");
+        digitalWrite(GPS_LED, LOW); //turn LEDs off
+        digitalWrite(MAG_LED, LOW);
+        
+        next_state=SEARCH;
+        delay(1000); //wait a second then GO!
     }
 
 }
