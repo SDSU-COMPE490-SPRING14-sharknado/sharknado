@@ -15,7 +15,7 @@
 using namespace sharknado;
 
 
-enum STATES { SEARCH, BEACON, ESCAPE, DONE_WAIT };
+enum STATES { START, SEARCH, BEACON, ESCAPE, DONE_WAIT };
 int state; //0,1,2 = search, beacon, obstacle
 int next_state;
 
@@ -82,8 +82,8 @@ PID speed_PID  (&current_speed, &motor_speed_coeff, &expected_speed, 2,5,1, DIRE
 
 
 void setup() {
-    //start in search mode
-    next_state=SEARCH;
+    //start in start mode
+    next_state=START;
 
     // Set uop led Pins
     pinMode(GPS_LED,OUTPUT);
@@ -153,7 +153,7 @@ void setup() {
 #endif
 
 
-    //timer interrupt
+    //timer interrupt for GPS
     Timer.getAvailable().attachInterrupt(gps_interrupt).start(1000); // Calls every 50ms
 
     compass.read();
@@ -161,8 +161,6 @@ void setup() {
     current_heading = aconv(compass_reading);
 
     // loop to see if gps and navigation are set up
-
-
     while (current_heading!=current_heading) //wait for magnetometer reading, nan != nan is always true
     {
         compass_reading=compass.heading();
@@ -190,16 +188,11 @@ void setup() {
     //initialize PIDs
     heading_PID.SetMode(AUTOMATIC);
     heading_PID.SetOutputLimits(-7,7);
+
     speed_PID.SetMode(AUTOMATIC);
     speed_PID.SetOutputLimits(0,50);
 
-    while(digitalRead(BTN_PIN)==HIGH) //wait until button is pressed
-    {
-        Serial.println("I'm waiting for you to push the button!");
-    }
-    digitalWrite(GPS_LED, LOW); //turn LEDs off
-    digitalWrite(MAG_LED, LOW);
-    delay(1000); //wait a second then GO!
+
 
 
 
@@ -211,59 +204,37 @@ void loop() {
     //next state logic
     state=next_state;
 
-    if(state==SEARCH) 		search_routine();
+    if (state==START) 		start_routine();
+    else if(state==SEARCH) 	search_routine();
     else if(state==BEACON) 	beacon_search_routine();
     else if(state==ESCAPE)	escape_routine();
     else if(state==DONE_WAIT)done_wait();
 
 }//end loop
 
-void update_dist_and_heading_to_target()
-{
-    float results [3];
-    loc.computeDistanceAndBearing(current_latlng.lat, current_latlng.lng, target1.lat, target1.lng, results);
-    current_target_distance = results[0];
-    current_target_heading = results[1];
-    Serial.println(current_target_heading);
-    if (current_target_heading<270) { //Checks if heading is in the southern hemisphere
-        if (current_target_heading>90) {
 
-            northflag=false; // if it is then north flag is false
-        } else
-        {
-            compass_reading = aconv(compass_reading);//convert to northern heading or -180 to 180
-            current_target_heading = aconv(current_target_heading);
-            northflag=true;
-        }
+
+void start_routine()
+{
+    if(digitalRead(BTN_PIN)==HIGH) //btn is pressed
+    {
+        digitalWrite(GPS_LED, LOW); //turn LEDs off
+        digitalWrite(MAG_LED, LOW);
+        next_state=SEARCH;
+        delay(1000); //wait a second then GO!
     }
-    else {
-        compass_reading = aconv(compass_reading);//convert to northern heading or -180 to 180
-        current_target_heading = aconv(current_target_heading);
-        northflag=true;
+    else
+    {
+        Serial.println("I'm waiting for you to push the button!");
     }
+
 }
-
-void update_expected_speed()
-{
-    if(current_target_distance > 9)       expected_speed=MAX_SPEED; //full speed for up to 20 meters to beacon
-    else if(current_target_distance > 3)   expected_speed=SLOW_SPEED; //go slow for 17 meters
-    else if(current_target_distance > 0) expected_speed=0; //this percission is questionable
-    else if(current_target_distance <=0)   expected_speed=0; //stop, we passed beacon.
-}
-
-
-void gps_interrupt()
-{
-    GPS.read();
-}
-
-
 
 void search_routine()
 {
     if(collision) next_state=ESCAPE;
     else if(beacon_range) next_state=BEACON;
-    else if(current_target_distance < 3) next_state=BEACON; //hack until we get beacon RF sensor
+
 
     if (GPS.newNMEAreceived()) {
         if (!GPS.parse(GPS.lastNMEA()))
@@ -285,6 +256,8 @@ void search_routine()
 
     //compute expected shark speed every cycle
     update_expected_speed();
+
+    if(current_target_distance < 3) next_state=BEACON; //hack until we get beacon RF sensor
 
     Serial.print(current_latlng.lat, 9);
     Serial.print(", ");
@@ -321,6 +294,9 @@ void search_routine()
     Serial.print(compass_reading);
     Serial.print(", expected speed: \t");
     Serial.println(expected_speed);
+
+
+
 }
 
 void beacon_search_routine()
@@ -368,6 +344,45 @@ void done_wait()
 {
     Serial.println("finished work, home");
     return;
+}
+
+void update_dist_and_heading_to_target()
+{
+    float results [3];
+    loc.computeDistanceAndBearing(current_latlng.lat, current_latlng.lng, target1.lat, target1.lng, results);
+    current_target_distance = results[0];
+    current_target_heading = results[1];
+    Serial.println(current_target_heading);
+    if (current_target_heading<270) { //Checks if heading is in the southern hemisphere
+        if (current_target_heading>90) {
+
+            northflag=false; // if it is then north flag is false
+        } else
+        {
+            compass_reading = aconv(compass_reading);//convert to northern heading or -180 to 180
+            current_target_heading = aconv(current_target_heading);
+            northflag=true;
+        }
+    }
+    else {
+        compass_reading = aconv(compass_reading);//convert to northern heading or -180 to 180
+        current_target_heading = aconv(current_target_heading);
+        northflag=true;
+    }
+}
+
+void update_expected_speed()
+{
+    if(current_target_distance > 9)       expected_speed=MAX_SPEED; //full speed for up to 20 meters to beacon
+    else if(current_target_distance > 3)   expected_speed=SLOW_SPEED; //go slow for 17 meters
+    else if(current_target_distance > 0) expected_speed=0; //this percission is questionable
+    else if(current_target_distance <=0)   expected_speed=0; //stop, we passed beacon.
+}
+
+
+void gps_interrupt()
+{
+    GPS.read();
 }
 
 
