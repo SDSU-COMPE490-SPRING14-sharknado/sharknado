@@ -36,10 +36,10 @@ BeaconSensor beacon_sensor;
 Sabertooth ST(128);
 Adafruit_GPS GPS(&GPS_SERIAL);
 
-Location::latlng target1= {32.773467f, -117.073507f};
-Location::latlng target2= {32.773467f, -117.073507f};
-Location::latlng target3= {32.773467f, -117.073507f};
-Location::latlng home= {32.773467f, -117.073507f};
+Location::latlng target1= {32.773746f, -117.071791f};
+Location::latlng target2= {32.774143f, -117.071791f};
+Location::latlng target3= {32.774140f, -117.070708f};
+Location::latlng home=    {32.774387f, -117.070701f};
 
 int target_index=0;
 Location::latlng targets [] = {target1, target2, target3, home};
@@ -180,8 +180,13 @@ void loop() {
 
 bool mag_ready=false;
 bool gps_ready=false;
+bool shark_flag=false;
 void start_routine()
 {
+    //initialize the motors to 0
+    ST.drive(0);
+    
+    
     //wait for Mag. to initialize
     compass.read();
     compass_reading=compass.heading();
@@ -200,6 +205,9 @@ void start_routine()
     //GPS Check
     if (!GPS.fix)
     {
+      if (GPS.newNMEAreceived()) 
+        if (!GPS.parse(GPS.lastNMEA()))
+           
         Serial.println("No GPS Fix...Please Hold");
         digitalWrite(GPS_LED, LOW);
     }
@@ -211,25 +219,32 @@ void start_routine()
 
 
     //Button check
-    if(digitalRead(BTN_PIN)==HIGH) //btn is pressed
+    if(digitalRead(BTN_PIN)==HIGH && shark_flag==false && gps_ready && mag_ready) //btn is pressed
     {
         Serial.println("I'm waiting for you to push the button!");
 
     }
-    else if(digitalRead(BTN_PIN)==LOW && mag_ready && gps_ready)
+    else if(digitalRead(BTN_PIN)==LOW)
     {
-		Serial.println("Starting sharknado...");
-        digitalWrite(GPS_LED, LOW); //turn LEDs off
-        digitalWrite(MAG_LED, LOW);
+        shark_flag=true;
+	
+    }
+    
+    if(shark_flag && mag_ready && gps_ready)
+    {
+      Serial.println("Starting sharknado...");
+      digitalWrite(GPS_LED, LOW); //turn LEDs off
+      digitalWrite(MAG_LED, LOW);
 
-        next_state=SEARCH;
-        delay(1000); //wait a second then GO!
+       next_state=SEARCH;
+       delay(1000); //wait a second then GO!
     }
 
 }
 
 void search_routine()
 {
+  
     if(collision) next_state=ESCAPE;
     else if(beacon_range) next_state=BEACON;
 
@@ -249,7 +264,10 @@ void search_routine()
     }
     else
     {
-        Serial.println("no fix on the gps");
+        Serial.println("no fix on the gps, transitioning back to start state");
+        next_state=START; 
+        return;
+        
     }
 
     //compute expected shark speed every cycle
@@ -270,6 +288,13 @@ void search_routine()
     //heading PID update
     compass.read();
     compass_reading=compass.heading();
+    //compass error checking
+    if (compass_reading!=compass_reading) //wait for magnetometer reading, nan != nan is always true
+    {
+        Serial.println("Magnetometer is broken, transitioning back to START STATE");
+        next_state=START;
+        return;
+    }
     if (northflag) {
         compass_reading = aconv(compass_reading); //if in northern hemisphere must convert. must have this because compass.read is called after distance update function
     }
@@ -311,7 +336,7 @@ void beacon_search_routine()
 
     if(rssi>90)
     {
-
+        ST.drive(0); //stop
         payload.dump(); //payload lib
 
         //set the next target 	//set next state
@@ -340,6 +365,7 @@ void escape_routine()
 //the robot shouldn't do anything
 void done_wait()
 {
+    ST.drive(0);
     Serial.println("finished work, home");
     return;
 }
@@ -347,7 +373,7 @@ void done_wait()
 void update_dist_and_heading_to_target()
 {
     float results [3];
-    loc.computeDistanceAndBearing(current_latlng.lat, current_latlng.lng, target1.lat, target1.lng, results);
+    loc.computeDistanceAndBearing(current_latlng.lat, current_latlng.lng, targets[target_index].lat, targets[target_index].lng, results);
     current_target_distance = results[0];
     current_target_heading = results[1];
     Serial.println(current_target_heading);
