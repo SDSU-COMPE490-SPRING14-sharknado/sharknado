@@ -31,24 +31,22 @@ void PayloadDumper::dump()
 #ifdef ARDUINO
            Serial.println("dumping payload w/ servo");
 	    int n;
-	    myservo.write(0);
-
-	    for (n=0; n<5;n+=1)
+	    for (n=0; n<2;n+=1)
 	    {
 	      myservo.write(180);
-	      delay(500);
+	      delay(250);
 	      myservo.write(150);
-	      delay(500);
+	      delay(250);
 	    }
 	    myservo.write(0);
-	    delay(3000);
+	    delay(1500);
 
-	    for (n=0; n<5;n+=1)
+	    for (n=0; n<2;n+=1)
 	    {
 	      myservo.write(30);
-	      delay(500);
+	      delay(250);
 	      myservo.write(0);
-	      delay(500);
+	      delay(250);
 	    }
 
 	    myservo.write(180);
