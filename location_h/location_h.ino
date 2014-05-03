@@ -13,6 +13,8 @@
 #include "FloatingFastRunningMedian.h"
 #define LAB_CAL //calibrate the compass for home operation
 #define ARDUINO
+//#define GPS_IGNORE //let's us run w/o GPS in lab
+#define SERIAL_EN //enables serial logging
 using namespace sharknado;
 
 
@@ -27,17 +29,22 @@ int next_state;
 #define MAG_LED 51
 #define BTN_PIN 49
 
-
-
+//the minimum tolerance for the distance to the GPS point
+//hopefully, if we get this far we can pick up the beacon signal
+#define GPS_TOL 2 
+#define PAYLOAD_DROP_TOL 250
 
 //beacon antenna
 #define ANTENNA_PIN A0
-FastRunningMedian<unsigned int,5, 0> antenna_median;
+#define RSSI_TOL 100
+FastRunningMedian<unsigned int,7, 0> antenna_median;
+unsigned int current_antenna_median=0;
 
 //ultrasonic vars
-FastRunningMedian<unsigned int,5, 999> left_median;
-FastRunningMedian<unsigned int,5, 999> center_median;
-FastRunningMedian<unsigned int,5, 999> right_median;
+volatile const int threshold=137;
+FastRunningMedian<unsigned int,2, 999> left_median;
+FastRunningMedian<unsigned int,2, 999> center_median;
+FastRunningMedian<unsigned int,2, 999> right_median;
 #define US_ROUNDTRIP_CM 57 
 #define trigPinL 32     // Pin 12 trigger output
 #define trigPinR 34
@@ -54,13 +61,12 @@ volatile long echo_durationR = 0;                      // Duration - difference 
 volatile long echo_startC = 0;                         // Records start of echo pulse
 volatile long echo_endC=  0;                           // Records end of echo pulse
 volatile long echo_durationC = 0;                      // Duration - difference between end and start
-int left_dist;
-int center_dist;
-int right_dist;
+volatile int left_dist;
+volatile int center_dist;
+volatile int right_dist;
 
 
 LSM303 compass;
-FloatingFastRunningMedian compass_median(5, 0) ;
 Location loc;
 PayloadDumper payload;
 BeaconSensor beacon_sensor;
@@ -119,7 +125,6 @@ void setup() {
 
     //setup antenna
      pinMode(ANTENNA_PIN, INPUT);
-     
      
     // Set uop led Pins
     pinMode(GPS_LED,OUTPUT);
@@ -213,13 +218,16 @@ void setup() {
 
 
     //interrupt for beacon sensor
-    Timer.getAvailable().attachInterrupt(antenna_interrupt).start(50000); //50ms
+    
+    //i think we are out of timers :(
+    //Timer.getAvailable().attachInterrupt(antenna_interrupt).start(50000); //50ms
 
 }
 
 int iterations=0;
 unsigned long running_duration;
 void loop() {
+
 
     //next state logic
     state=next_state;
@@ -228,7 +236,11 @@ void loop() {
     else if(state==SEARCH) 	search_routine();
     else if(state==BEACON) 	beacon_routine();
     else if(state==ESCAPE)	escape_routine();
-    else if(state==END)   end_routine();
+    else if(state==END)         end_routine();
+    
+#ifdef SERIAL_EN
+  serial_log();
+#endif
 
   iterations++;
   running_duration = millis() / iterations;
@@ -262,13 +274,13 @@ void start_routine()
         digitalWrite(MAG_LED, HIGH); //turn Yellow LED on
     }
 
-    //GPS Check
+#ifndef GPS_IGNORE
     if (!GPS.fix)
     {
         if (GPS.newNMEAreceived())
             if (!GPS.parse(GPS.lastNMEA()))
 
-                Serial.println("No GPS Fix...Please Hold");
+        Serial.println("No GPS Fix...Please Hold");
         digitalWrite(GPS_LED, LOW);
     }
     else //GPS fix initiated
@@ -276,16 +288,22 @@ void start_routine()
         gps_ready=true;
         digitalWrite(GPS_LED, HIGH); //Turn Red LED on
     }
+#else
+        Serial.println("overriding GPS signal");
+	gps_ready=true;
+        digitalWrite(GPS_LED, HIGH); //Turn Red LED on
+#endif
 
 
     //Button check
-    if(digitalRead(BTN_PIN)==HIGH && shark_flag==false && gps_ready && mag_ready) //btn is pressed
+    if(digitalRead(BTN_PIN)==HIGH && !shark_flag && gps_ready && mag_ready) //btn is pressed
     {
         Serial.println("I'm waiting for you to push the button!");
 
     }
     else if(digitalRead(BTN_PIN)==LOW)
     {
+        Serial.println("start button pressed");
         shark_flag=true;
 
     }
@@ -309,6 +327,8 @@ unsigned long compass_last_time;
 unsigned long compass_running_time;
 unsigned int compass_sample_count=0;
 unsigned long compass_running_average=0;
+
+
 void search_routine()
 {
     if(check_collision()) 
@@ -316,7 +336,7 @@ void search_routine()
 		next_state = ESCAPE;
 		return;
 	}
-    else if(beacon_range()) 
+    else if(beacon_range() && current_target_distance < GPS_TOL) 
 	{
 		next_state = BEACON;
 		return;
@@ -338,33 +358,24 @@ void search_routine()
     }
     else
     {
+#ifndef GPS_IGNORE
         Serial.println("no fix on the gps, transitioning back to start state");
         next_state=START;
         return;
+#endif
 
     }
 
     //compute expected shark speed every cycle
     update_expected_speed();
 
-    if(current_target_distance < 2) next_state=BEACON; //hack until we get beacon RF sensor
 
-    Serial.print(current_latlng.lat, 9);
-    Serial.print(", ");
-    Serial.print(current_latlng.lng, 9);
-    Serial.print(", ");
-    Serial.print("distance: ");
-    Serial.print(current_target_distance);
-    Serial.print(", ");
-    Serial.print("GPS heading: ");
-    Serial.print(current_target_heading);
 
     //heading PID update
     compass_start_time=millis();
     compass.read();
     float compass_sample = compass.heading();
-    compass_median.addValue(compass_sample);
-    compass_reading=compass_median.getMedian(); //filtered compass reading
+    compass_reading=compass_sample;//compass_median.getMedian(); //filtered compass reading
     compass_end_time=millis();
     unsigned long compass_elapsed=compass_end_time-compass_start_time;
     compass_running_time = compass_running_time + compass_elapsed;
@@ -392,16 +403,7 @@ void search_routine()
     int coeff=expected_speed/5;
     heading_PID.SetOutputLimits(-coeff,coeff); //turning is  a function of speed
 
-    //print heading info
-    Serial.print(", motor_turning_coeff:\t");
-    Serial.print(turning);
-    Serial.print(", ");
-    Serial.print("current heading: ");
-    Serial.print(compass_reading);
-    Serial.print(", expected speed: ");
-    Serial.print(expected_speed);
-    Serial.print(", loop time: ");Serial.print(running_duration);
-    Serial.print(", mag avg: ");Serial.println(compass_running_average);
+
 
 
 
@@ -409,18 +411,16 @@ void search_routine()
 
 void beacon_routine()
 {
-    //Drive forward slowly until RSSI is > 90
+    //Drive forward slowly until RSSI is > TOL
     //then drop ball
     ST.turn(0);
     ST.drive(SLOW_SPEED);
 
-    //drop golf ball at some point
-    //this is hacked to return random number between 50 and 100
     int rssi = antenna_median.getMedian();
     Serial.print("RSSI: ");
-    Serial.println(rssi);
+    Serial.print(rssi);
 
-    if(rssi>256)
+    if(rssi > PAYLOAD_DROP_TOL)
     {
         ST.drive(0); //stop
         payload.dump(); //payload lib
@@ -434,21 +434,22 @@ void beacon_routine()
 
 void escape_routine()
 {
-  Serial.print("ESCAPE");
+  Serial.print("**ESCAPE!!! ");
     if(!check_collision()) 
 	{
 		next_state = SEARCH;
 		return;
 	}
 	
-    ST.drive(MAX_SPEED);
+    
 
     int power=MAX_SPEED/2;
+    
 
     bool left, center, right;
-    left = (left_dist < 100) ? true :false;
-    center = (center_dist < 100) ? true :false;
-    right = (right_dist < 100) ? true :false;
+    left = (left_dist < threshold) ? true :false;
+    center = (center_dist < threshold) ? true :false;
+    right = (right_dist < threshold) ? true :false;
 
 
     if(left && !center && !right)
@@ -460,8 +461,8 @@ void escape_routine()
     else if(!left && center && !right)
     {
         //stop, pivot right
-        ST.drive(power);
-        ST.turn(power);
+        ST.drive(0);
+        ST.turn(0);
     }
     else if(!left && !center && right)
     {
@@ -534,6 +535,10 @@ void update_expected_speed()
 void gps_interrupt()
 {
     GPS.read();
+    
+    //piggyback the GPS interrupt, b/c we ran out of timers
+    int sample=analogRead(ANTENNA_PIN);
+    antenna_median.addValue(sample);
 }
 
 
@@ -565,7 +570,7 @@ void goLow()
 
 }
 
-const int threshold=100;
+
 volatile int left_collision;
 void echo_interruptL()
 {
@@ -586,7 +591,7 @@ void echo_interruptL()
        
         left_dist = median / 58;
 
-        if(left_dist < threshold) left_collision=true;
+        if(left_dist < 137) left_collision=true;
         else left_collision=false;
 
         break;
@@ -612,7 +617,7 @@ void echo_interruptR()
         
         
         right_dist=median / 58;
-        if(right_dist < threshold) right_collision=true;
+        if(right_dist < 137) right_collision=true;
         else right_collision=false;
         break;
     }
@@ -632,11 +637,11 @@ void echo_interruptC()
         echo_endC = micros();                          // Save the end time
         echo_durationC = echo_endC - echo_startC;        // Calculate the pulse duration
         
-        center_median.addValue(echo_durationC); // adds a value
-        unsigned int median = center_median.getMedian(); // retieves the median
+        center_median.addValue(echo_durationC);  
+        unsigned int median = center_median.getMedian(); 
         
         center_dist = median / 58;
-        if(center_dist < threshold) center_collision=true;
+        if(center_dist < 137) center_collision=true;
         else center_collision=false;
         break;
     }
@@ -644,28 +649,49 @@ void echo_interruptC()
 
 bool check_collision()
 {
-    Serial.print( "L= ");
-    Serial.print(left_dist);
-    Serial.print(" C= ");
-    Serial.print(center_dist);
-    Serial.print(" R= ");
-    Serial.println(right_dist);
-
     if(left_collision || center_collision || right_collision) return true;
     return false;
-
-
 }
 
 bool beacon_range()
 {
-    return false;
+    //update the global median var.
+    current_antenna_median = antenna_median.getMedian();
+    if(current_antenna_median > RSSI_TOL) return true;
+    else return false;
 }
 
-void antenna_interrupt()
+void serial_log()
 {
-    int sample=analogRead(ANTENNA_PIN);
+      //print heading info
+   
+    
+    Serial.print(current_latlng.lat, 9);
+    Serial.print(", ");
+    Serial.print(current_latlng.lng, 9);
+    Serial.print(", dist.: ");
+    Serial.print(current_target_distance);
+    Serial.print(", GPS heading: ");
+    Serial.print(current_target_heading);
+    Serial.print(", RSSI: ");Serial.print(current_antenna_median);
+    Serial.print(", turning_coeff: ");
+    Serial.print(-motor_turning_coeff);
+    Serial.print(", curr. heading: ");
+    Serial.print(compass_reading);
+    Serial.print(", exp. speed: ");
+    Serial.print(expected_speed);
+    Serial.print(", loop time: ");
+    Serial.print(running_duration);
+    Serial.print(", mag avg: ");
+    Serial.print(compass_running_average);
+    Serial.print( ", L= ");
+    Serial.print(left_dist);
+    Serial.print(", C= ");
+    Serial.print(center_dist);
+    Serial.print(", R= ");
+    Serial.println(right_dist);
 }
+
 
 
 

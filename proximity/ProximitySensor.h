@@ -9,11 +9,17 @@
 #define PROXIMITYSENSOR_H_
 
 namespace sharknado {
-
+   int trig_pin;
+  static int echo_pin;
+  static volatile long csample;
 class ProximitySensor {
 public:
-	ProximitySensor();
+	ProximitySensor(int trigpin, int echopin) ;
 	virtual ~ProximitySensor();
+        static void timer_callback();
+        int sample();
+        int getEchoPin();
+        
 };
 
 } /* namespace sharknado */
