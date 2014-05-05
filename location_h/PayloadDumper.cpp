@@ -43,13 +43,14 @@ void PayloadDumper::dump()
 
 	    for (n=0; n<2;n+=1)
 	    {
-	      myservo.write(30);
-	      delay(250);
 	      myservo.write(0);
+	      delay(250);
+	      myservo.write(30);
 	      delay(250);
 	    }
 
 	    myservo.write(180);
+          delay(1500);
    Serial.println("dumping COMPLETE");
 #endif
 

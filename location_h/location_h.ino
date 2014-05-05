@@ -22,21 +22,23 @@ enum STATES { START, SEARCH, BEACON, ESCAPE, END };
 int state; //0,1,2 = search, beacon, obstacle
 int next_state;
 
-#define MAX_SPEED 40
+#define MAX_SPEED 42
 #define SLOW_SPEED 20
 #define GPS_SERIAL Serial2 //had to hack adafruit lib to use Serial2
-#define GPS_LED 50
-#define MAG_LED 51
+#define GPS_LED 51
+#define MAG_LED 53
 #define BTN_PIN 49
 
 //the minimum tolerance for the distance to the GPS point
 //hopefully, if we get this far we can pick up the beacon signal
 #define GPS_TOL 2 
-#define PAYLOAD_DROP_TOL 250
+#define PAYLOAD_DROP_TOL 195
 
 //beacon antenna
+unsigned int max_reading=0;
+int stop_count=0;
 #define ANTENNA_PIN A0
-#define RSSI_TOL 100
+#define RSSI_TOL 195
 FastRunningMedian<unsigned int,7, 0> antenna_median;
 unsigned int current_antenna_median=0;
 
@@ -47,11 +49,11 @@ FastRunningMedian<unsigned int,2, 999> center_median;
 FastRunningMedian<unsigned int,2, 999> right_median;
 #define US_ROUNDTRIP_CM 57 
 #define trigPinL 32     // Pin 12 trigger output
-#define trigPinR 34
-#define trigPinC 36
+#define trigPinR 30
+#define trigPinC 34
 #define echoPinL 33                                    // Pin 2 Echo input
-#define echoPinR 35
-#define echoPinC 37
+#define echoPinR 31
+#define echoPinC 35
 volatile long echo_startL = 0;                         // Records start of echo pulse
 volatile long echo_endL = 0;                           // Records end of echo pulse
 volatile long echo_durationL = 0;                      // Duration - difference between end and start
@@ -74,16 +76,16 @@ Sabertooth ST(128);
 Adafruit_GPS GPS(&GPS_SERIAL);
 
 const int TARGET_COUNT=4;
-Location::latlng target1= {32.739051f, -117.139245f};
-Location::latlng target2= {32.738997f, -117.140717f};
-Location::latlng target3= {32.738681f, -117.140031f};
-Location::latlng home=    {32.738393f, -117.139731f};
+Location::latlng target1= {32.773780f, -117.073431f};
+Location::latlng target2= {32.773687f, -117.072835f};
+Location::latlng target3= {32.773745f, -117.073478f};
+Location::latlng home=    {32.773750f, -117.073432f};
 
 int target_index=0;
 Location::latlng targets [] = {target1, target2, target3, home};
 
 //distance and heading to target
-float current_target_distance=0;
+float current_target_distance=999999999;
 double current_target_heading=0;
 double compass_reading = 0;
 
@@ -251,7 +253,7 @@ bool gps_ready=false;
 bool shark_flag=false;
 void start_routine()
 {
-    //initialize the motors to 0
+  //initialize the motors to 0
     ST.drive(0);
     mag_ready=false;
     gps_ready=false;
@@ -278,8 +280,9 @@ void start_routine()
     if (!GPS.fix)
     {
         if (GPS.newNMEAreceived())
-            if (!GPS.parse(GPS.lastNMEA()))
-
+              GPS.parse(GPS.lastNMEA());
+            
+            
         Serial.println("No GPS Fix...Please Hold");
         digitalWrite(GPS_LED, LOW);
     }
@@ -336,11 +339,7 @@ void search_routine()
 		next_state = ESCAPE;
 		return;
 	}
-    else if(beacon_range() && current_target_distance < GPS_TOL) 
-	{
-		next_state = BEACON;
-		return;
-	}
+   
 	
 	
     if (GPS.newNMEAreceived()) {
@@ -369,6 +368,14 @@ void search_routine()
     //compute expected shark speed every cycle
     update_expected_speed();
 
+   if(current_target_distance < GPS_TOL) 
+	{
+                
+		next_state = BEACON;
+		//reset beacon state variables
+		max_reading=0;
+		stop_count=0;
+	}
 
 
     //heading PID update
@@ -409,6 +416,8 @@ void search_routine()
 
 }
 
+
+
 void beacon_routine()
 {
     //Drive forward slowly until RSSI is > TOL
@@ -417,19 +426,29 @@ void beacon_routine()
     ST.drive(SLOW_SPEED);
 
     int rssi = antenna_median.getMedian();
-    Serial.print("RSSI: ");
+    Serial.print("BEACON: RSSI: ");
     Serial.print(rssi);
-
-    if(rssi > PAYLOAD_DROP_TOL)
-    {
-        ST.drive(0); //stop
-        payload.dump(); //payload lib
-
-        //set the next target 	//set next state
-        target_index++;
-        if( (target_index % TARGET_COUNT) == 0) next_state = END; //you are home, stop
-        else next_state = SEARCH; //search for next target
-    }
+    
+    //keep going forward if signal is increasing
+    if(beacon_range() && rssi >= max_reading)
+     {
+       max_reading = rssi;
+       stop_count=0;
+     }
+     else
+     {
+       stop_count++;
+       if(stop_count > 3) //rssi > PAYLOAD_DROP_TOL && s
+           Serial.println("Stopping for payload");
+         
+           ST.drive(0); //stop
+           payload.dump(); //payload lib
+		   
+           //set the next target 	//set next state
+           target_index++;
+           if( (target_index % TARGET_COUNT) == 0) next_state = END; //you are home, stop
+           else next_state = SEARCH; //search for next target
+     }
 }
 
 void escape_routine()
@@ -527,7 +546,7 @@ void update_expected_speed()
 {
     if(current_target_distance > 9)       expected_speed=MAX_SPEED; //full speed for up to 20 meters to beacon
     else if(current_target_distance > 3)  expected_speed=SLOW_SPEED; //go slow for 17 meters
-    else if(current_target_distance > 0)  expected_speed=0; //this percission is questionable
+    else if(current_target_distance > 0)  expected_speed=SLOW_SPEED; //this percission is questionable
     else if(current_target_distance <=0)  expected_speed=0; //stop, we passed beacon.
 }
 
@@ -657,7 +676,7 @@ bool beacon_range()
 {
     //update the global median var.
     current_antenna_median = antenna_median.getMedian();
-    if(current_antenna_median > RSSI_TOL) return true;
+    if(current_antenna_median >= RSSI_TOL) return true;
     else return false;
 }
 
@@ -665,7 +684,8 @@ void serial_log()
 {
       //print heading info
    
-    
+    Serial.print(state);
+    Serial.print(": ");
     Serial.print(current_latlng.lat, 9);
     Serial.print(", ");
     Serial.print(current_latlng.lng, 9);
