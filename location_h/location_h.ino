@@ -22,7 +22,7 @@ enum STATES { START, SEARCH, BEACON, ESCAPE, END };
 int state; //0,1,2 = search, beacon, obstacle
 int next_state;
 
-#define MAX_SPEED 42
+#define MAX_SPEED 45
 #define SLOW_SPEED 20
 #define GPS_SERIAL Serial2 //had to hack adafruit lib to use Serial2
 #define GPS_LED 51
@@ -43,10 +43,18 @@ FastRunningMedian<unsigned int,7, 0> antenna_median;
 unsigned int current_antenna_median=0;
 
 //ultrasonic vars
-volatile const int threshold=137;
-FastRunningMedian<unsigned int,2, 999> left_median;
-FastRunningMedian<unsigned int,2, 999> center_median;
-FastRunningMedian<unsigned int,2, 999> right_median;
+
+//if we high-pass filter the sensor inputs at a cutoff of ULTRA_THRESHOLD
+//and then pipe that to the median filter, it will still filter out
+//random blips and still allow a fast response, b/c the max the median
+//can ge is 137 so, it will update fast. This filter only filters out 
+//1 outlier, but should be good enough. To filter out 2 outliers
+// you need a median of 5, which will be too slow a response to real values,
+//it would take 3 samples instead of 2 w/ a median of 3.
+#define ULTRA_THRESHOLD 137
+FastRunningMedian<unsigned int,3, ULTRA_THRESHOLD> left_median;
+FastRunningMedian<unsigned int,3, ULTRA_THRESHOLD> center_median;
+FastRunningMedian<unsigned int,3, ULTRA_THRESHOLD> right_median;
 #define US_ROUNDTRIP_CM 57 
 #define trigPinL 32     // Pin 12 trigger output
 #define trigPinR 30
@@ -76,13 +84,14 @@ Sabertooth ST(128);
 Adafruit_GPS GPS(&GPS_SERIAL);
 
 const int TARGET_COUNT=4;
-Location::latlng target1= {32.773780f, -117.073431f};
-Location::latlng target2= {32.773687f, -117.072835f};
-Location::latlng target3= {32.773745f, -117.073478f};
-Location::latlng home=    {32.773750f, -117.073432f};
+Location::latlng target1= {32.773281f, -117.072252f};
+Location::latlng target2= {32.773793f, -117.073496f};
+Location::latlng target3= {32.773456f, -117.073501f};
+Location::latlng pivot =  {32.773540f, -117.072698f};
+Location::latlng home=    {32.773942f, -117.072672f};
 
 int target_index=0;
-Location::latlng targets [] = {target1, target2, target3, home};
+Location::latlng targets [] = {target1, target2, target3, pivot, home};
 
 //distance and heading to target
 float current_target_distance=999999999;
@@ -457,7 +466,9 @@ void escape_routine()
     if(!check_collision()) 
 	{
 		next_state = SEARCH;
-		return;
+                //lets not return immedietly,
+                //so we can make sure we are clear of obstacle
+		//return;
 	}
 	
     
@@ -466,54 +477,57 @@ void escape_routine()
     
 
     bool left, center, right;
-    left = (left_dist < threshold) ? true :false;
-    center = (center_dist < threshold) ? true :false;
-    right = (right_dist < threshold) ? true :false;
+    left = (left_dist < ULTRA_THRESHOLD) ? true :false;
+    center = (center_dist < ULTRA_THRESHOLD) ? true :false;
+    right = (right_dist < ULTRA_THRESHOLD) ? true :false;
 
-
-    if(left && !center && !right)
-    {
-        //go right
-        ST.drive(power);
-        ST.turn(power);
-    }
-    else if(!left && center && !right)
+    //negative is turn RIGHT
+    if(left && center && right)
     {
         //stop, pivot right
         ST.drive(0);
-        ST.turn(0);
-    }
-    else if(!left && !center && right)
-    {
-        //go left
-        ST.drive(power);
-        ST.turn(-power);
-    }
-    else if(left && center && !right)
-    {
-        // go right
-        ST.drive(power);
-        ST.turn(power);
-    }
-    else if(!left && center && right)
-    {
-        //go left
-        ST.drive(power);
-        ST.turn(-power);
-    }
-    else if(left && center && right)
-    {
-        //stop, pivot right
-        ST.drive(power);
         ST.turn(power);
     }
     else if(left && !center && right)
     {
         //same as center case
         //stop, pivot randomly
-        ST.drive(power);
-        ST.turn(power );
+        ST.drive(0);
+        ST.turn(power);
     }
+    else if(!left && center && right)
+    {
+        //go left
+        ST.drive(power);
+        ST.turn(power);
+    }
+    else if(left && center && !right)
+    {
+        // go right
+        ST.drive(power);
+        ST.turn(-power);
+    }
+    else if(left && !center && !right)
+    {
+        //go right
+        ST.drive(power);
+        ST.turn(-power);
+    }
+    else if(!left && center && !right)
+    {
+        //stop, pivot right
+        ST.drive(power);
+        ST.turn(-power);
+    }
+    else if(!left && !center && right)
+    {
+        //go left
+        ST.drive(power);
+        ST.turn(power);
+    }
+    
+
+    
 
 }
 
@@ -593,7 +607,7 @@ void goLow()
 volatile int left_collision;
 void echo_interruptL()
 {
-    switch (digitalRead(echoPinL))                     // Test to see if the signal is high or low
+    switch (digitalRead(echoPinL))                      
     {
     case HIGH:                                      // High so must be the start of the echo pulse
         echo_endL = 0;                                 // Clear the end time
@@ -601,16 +615,17 @@ void echo_interruptL()
         break;
 
     case LOW:                                       // Low so must be the end of the echo pulse
-        echo_endL = micros();                          // Save the end time
+        echo_endL = micros();                           
         echo_durationL = echo_endL - echo_startL;        // Calculate the pulse duration
+        if(echo_durationL > ULTRA_THRESHOLD) echo_durationL = ULTRA_THRESHOLD;  //low pass filter to keep median fast
          
-        left_median.addValue(echo_durationL); // adds a value
-        unsigned int median = left_median.getMedian(); // retieves the median
+        left_median.addValue(echo_durationL);  
+        unsigned int median = left_median.getMedian();  
         
        
         left_dist = median / 58;
 
-        if(left_dist < 137) left_collision=true;
+        if(left_dist < ULTRA_THRESHOLD) left_collision=true;
         else left_collision=false;
 
         break;
@@ -620,7 +635,7 @@ void echo_interruptL()
 volatile int right_collision;
 void echo_interruptR()
 {
-    switch (digitalRead(echoPinR))                     // Test to see if the signal is high or low
+    switch (digitalRead(echoPinR))                      
     {
     case HIGH:                                      // High so must be the start of the echo pulse
         echo_endR = 0;                                 // Clear the end time
@@ -630,13 +645,15 @@ void echo_interruptR()
     case LOW:                                       // Low so must be the end of hte echo pulse
         echo_endR = micros();                          // Save the end time
         echo_durationR = echo_endR - echo_startR;        // Calculate the pulse duration
+        if(echo_durationR > ULTRA_THRESHOLD) echo_durationR = ULTRA_THRESHOLD; //low pass filter
         
-        right_median.addValue(echo_durationR); // adds a value
-        unsigned int median = right_median.getMedian(); // retieves the median
+        
+        right_median.addValue(echo_durationR);  
+        unsigned int median = right_median.getMedian();  
         
         
         right_dist=median / 58;
-        if(right_dist < 137) right_collision=true;
+        if(right_dist < ULTRA_THRESHOLD) right_collision=true;
         else right_collision=false;
         break;
     }
@@ -655,12 +672,13 @@ void echo_interruptC()
     case LOW:                                       // Low so must be the end of hte echo pulse
         echo_endC = micros();                          // Save the end time
         echo_durationC = echo_endC - echo_startC;        // Calculate the pulse duration
+        if(echo_durationC > ULTRA_THRESHOLD) echo_durationC = ULTRA_THRESHOLD;
         
         center_median.addValue(echo_durationC);  
         unsigned int median = center_median.getMedian(); 
         
         center_dist = median / 58;
-        if(center_dist < 137) center_collision=true;
+        if(center_dist < ULTRA_THRESHOLD) center_collision=true;
         else center_collision=false;
         break;
     }
