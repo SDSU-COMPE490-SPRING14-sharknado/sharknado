@@ -51,10 +51,12 @@ unsigned int current_antenna_median=0;
 //1 outlier, but should be good enough. To filter out 2 outliers
 // you need a median of 5, which will be too slow a response to real values,
 //it would take 3 samples instead of 2 w/ a median of 3.
-#define ULTRA_THRESHOLD 137
+#define ULTRA_THRESHOLD 175
+#define ULTRA_TIME_THRESHHOLD 10150
+
 FastRunningMedian<unsigned int,3, ULTRA_THRESHOLD> left_median;
 FastRunningMedian<unsigned int,3, ULTRA_THRESHOLD> center_median;
-FastRunningMedian<unsigned int,3, ULTRA_THRESHOLD> right_median;
+FastRunningMedian<unsigned int,7, ULTRA_THRESHOLD> right_median;
 #define US_ROUNDTRIP_CM 57 
 #define trigPinL 32     // Pin 12 trigger output
 #define trigPinR 30
@@ -486,14 +488,14 @@ void escape_routine()
     {
         //stop, pivot right
         ST.drive(0);
-        ST.turn(power);
+        ST.turn(power*2);
     }
     else if(left && !center && right)
     {
         //same as center case
         //stop, pivot randomly
         ST.drive(0);
-        ST.turn(power);
+        ST.turn(power*2);
     }
     else if(!left && center && right)
     {
@@ -515,7 +517,7 @@ void escape_routine()
     }
     else if(!left && center && !right)
     {
-        //stop, pivot right
+        //stop, right
         ST.drive(power);
         ST.turn(-power);
     }
@@ -617,15 +619,14 @@ void echo_interruptL()
     case LOW:                                       // Low so must be the end of the echo pulse
         echo_endL = micros();                           
         echo_durationL = echo_endL - echo_startL;        // Calculate the pulse duration
-        if(echo_durationL > ULTRA_THRESHOLD) echo_durationL = ULTRA_THRESHOLD;  //low pass filter to keep median fast
-         
-        left_median.addValue(echo_durationL);  
-        unsigned int median = left_median.getMedian();  
-        
        
-        left_dist = median / 58;
+        left_dist = echo_durationL / 58;
+        
+        if(left_dist > ULTRA_THRESHOLD) left_dist = ULTRA_THRESHOLD;  //low pass filter to keep median fast
+        left_median.addValue(left_dist);  
+        unsigned int median = left_median.getMedian();
 
-        if(left_dist < ULTRA_THRESHOLD) left_collision=true;
+        if(median < ULTRA_THRESHOLD-95) left_collision=true;
         else left_collision=false;
 
         break;
@@ -645,16 +646,21 @@ void echo_interruptR()
     case LOW:                                       // Low so must be the end of hte echo pulse
         echo_endR = micros();                          // Save the end time
         echo_durationR = echo_endR - echo_startR;        // Calculate the pulse duration
-        if(echo_durationR > ULTRA_THRESHOLD) echo_durationR = ULTRA_THRESHOLD; //low pass filter
         
         
-        right_median.addValue(echo_durationR);  
+        
+       
+        
+        
+        right_dist=echo_durationR / 58;
+        
+        if(right_dist > ULTRA_THRESHOLD) right_dist = ULTRA_THRESHOLD; //low pass filter
+        right_median.addValue(right_dist);  
         unsigned int median = right_median.getMedian();  
         
-        
-        right_dist=median / 58;
-        if(right_dist < ULTRA_THRESHOLD) right_collision=true;
+        if(median < ULTRA_THRESHOLD) right_collision=true;
         else right_collision=false;
+        
         break;
     }
 }
@@ -672,13 +678,15 @@ void echo_interruptC()
     case LOW:                                       // Low so must be the end of hte echo pulse
         echo_endC = micros();                          // Save the end time
         echo_durationC = echo_endC - echo_startC;        // Calculate the pulse duration
-        if(echo_durationC > ULTRA_THRESHOLD) echo_durationC = ULTRA_THRESHOLD;
+        center_dist = echo_durationC / 58;
         
-        center_median.addValue(echo_durationC);  
+        if(center_dist > ULTRA_THRESHOLD) center_dist = ULTRA_THRESHOLD;
+        
+        center_median.addValue(center_dist);  
         unsigned int median = center_median.getMedian(); 
         
-        center_dist = median / 58;
-        if(center_dist < ULTRA_THRESHOLD) center_collision=true;
+        
+        if(median < ULTRA_THRESHOLD) center_collision=true;
         else center_collision=false;
         break;
     }
